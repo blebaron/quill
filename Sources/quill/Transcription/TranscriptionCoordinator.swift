@@ -1,12 +1,17 @@
+import FluidAudio
 import Foundation
 
 /// Post-recording pipeline: a serial queue of session folders to transcribe.
 /// mic.caf → "me", system.caf → "them"; each track's segments are shifted by
 /// its start offset, merged by timestamp, and written as transcript.json
-/// (canonical) plus transcript.md (readable). The filesystem is the queue —
-/// `resumePending()` rescans at launch, so a crash or quit mid-transcription
-/// just retries on next run. Failures append to the session's transcribe.log
-/// and never block later jobs.
+/// (canonical) plus transcript.md (readable). When diarization is enabled,
+/// each track is additionally diarized and its segments relabeled into a
+/// single "Speaker N" id space (numbered by first appearance across both
+/// tracks), with per-speaker talk time and voice embeddings written to
+/// speakers.json — fodder for a later, separate speaker-naming pass. The
+/// filesystem is the queue — `resumePending()` rescans at launch, so a crash
+/// or quit mid-transcription just retries on next run. Failures append to
+/// the session's transcribe.log and never block later jobs.
 actor TranscriptionCoordinator {
     enum Status: Sendable {
         case idle
@@ -17,6 +22,7 @@ actor TranscriptionCoordinator {
     private var queue: [URL] = []
     private var draining = false
     private var engine: TranscriptionEngine?
+    private var diarizer: DiarizationEngine?
     private var lastFailure: String?
     private var statusHandler: (@Sendable (Status) -> Void)?
 
@@ -90,6 +96,8 @@ actor TranscriptionCoordinator {
         }
         await engine?.release()
         engine = nil
+        await diarizer?.release()
+        diarizer = nil
         publish(lastFailure.map { .failed(session: $0) } ?? .idle)
         draining = false
         // An enqueue that landed between the loop exiting and the release
@@ -101,7 +109,21 @@ actor TranscriptionCoordinator {
         let meta = try SessionMeta.read(from: dir)
         let engine = try await preparedEngine()
 
-        var merged: [Transcript.Segment] = []
+        var diarizer: DiarizationEngine?
+        if Config.diarizationEnabled() {
+            do {
+                diarizer = try await preparedDiarizer()
+            } catch {
+                log(dir, "diarization unavailable: \(error)")
+            }
+        }
+
+        // Per-track diarization results, keyed by the track's fallback label
+        // ("me"/"them") — kept around after the loop to compute each global
+        // speaker's talk time and embedding for speakers.json.
+        var diarizations: [String: TrackDiarization] = [:]
+        var raw: [RawSegment] = []
+
         for track in meta.tracks {
             let audio = dir.appendingPathComponent(track.file)
             guard FileManager.default.fileExists(atPath: audio.path) else {
@@ -109,26 +131,86 @@ actor TranscriptionCoordinator {
                 continue
             }
             log(dir, "transcribing \(track.file) (\(engine.name))")
+            // ASR and diarization both read the same file independently —
+            // run them concurrently rather than paying their cost serially.
+            // A fresh local binding (rather than closing over `diarizer`
+            // directly) keeps each loop iteration's async-let independent of
+            // the others in the eyes of the region-isolation checker.
+            let trackDiarizer = diarizer
+            async let segmentsTask = engine.transcribe(audio)
+            async let diarizationTask: DiarizationResult? = trackDiarizer?.diarize(audio)
+
             // One bad track (empty, truncated) shouldn't cost us the other's
             // transcript — log it and keep going.
             let segments: [TranscriptSegment]
             do {
-                segments = try await engine.transcribe(audio)
+                segments = try await segmentsTask
             } catch {
                 log(dir, "skipping \(track.file): \(error)")
+                // Still await the diarization child task so its result (or
+                // error) doesn't leak past this scope.
+                _ = try? await diarizationTask
                 continue
             }
+
+            var trackDiarization: TrackDiarization?
+            do {
+                if let result = try await diarizationTask {
+                    let diarization = TrackDiarization(
+                        timeline: result.segments,
+                        speakerDatabase: result.speakerDatabase ?? [:]
+                    )
+                    diarizations[track.speaker] = diarization
+                    trackDiarization = diarization
+                }
+            } catch {
+                log(dir, "diarization skipped for \(track.file): \(error)")
+            }
+
             let offset = TimeInterval(track.offsetMs) / 1000
-            merged += segments.map {
-                Transcript.Segment(
-                    speaker: track.speaker,
-                    start_ms: Int(($0.start + offset) * 1000),
-                    end_ms: Int(($0.end + offset) * 1000),
-                    text: $0.text
-                )
+            for segment in segments {
+                let localSpeakerId = trackDiarization.flatMap {
+                    Self.speakerId(at: segment, in: $0.timeline)
+                }
+                raw.append(RawSegment(
+                    trackLabel: track.speaker,
+                    localSpeakerId: localSpeakerId,
+                    start_ms: Int((segment.start + offset) * 1000),
+                    end_ms: Int((segment.end + offset) * 1000),
+                    text: segment.text
+                ))
             }
         }
-        merged.sort { $0.start_ms < $1.start_ms }
+        raw.sort { $0.start_ms < $1.start_ms }
+
+        // Assign "Speaker N" in order of first appearance across the whole
+        // chronological transcript, not per-track — so numbering reads
+        // naturally regardless of which physical track someone spoke on.
+        // Segments with no diarization match (disabled, failed, or no
+        // overlapping cluster) keep the track's flat fallback label.
+        var globalIds: [String: String] = [:]
+        var nextSpeakerNumber = 1
+        var merged: [Transcript.Segment] = []
+        for segment in raw {
+            let speaker: String
+            if let localSpeakerId = segment.localSpeakerId {
+                let key = "\(segment.trackLabel)::\(localSpeakerId)"
+                if let assigned = globalIds[key] {
+                    speaker = assigned
+                } else {
+                    let assigned = "Speaker \(nextSpeakerNumber)"
+                    globalIds[key] = assigned
+                    nextSpeakerNumber += 1
+                    speaker = assigned
+                }
+            } else {
+                speaker = segment.trackLabel
+            }
+            merged.append(Transcript.Segment(
+                speaker: speaker, start_ms: segment.start_ms, end_ms: segment.end_ms,
+                text: segment.text
+            ))
+        }
 
         let transcript = Transcript(
             engine: engine.name,
@@ -137,6 +219,7 @@ actor TranscriptionCoordinator {
             segments: merged
         )
         try transcript.write(to: dir)
+        writeSpeakers(to: dir, diarizations: diarizations, globalIds: globalIds)
         log(dir, "done — \(merged.count) segments")
     }
 
@@ -152,6 +235,108 @@ actor TranscriptionCoordinator {
         try await engine.prepare()
         self.engine = engine
         return engine
+    }
+
+    private func preparedDiarizer() async throws -> DiarizationEngine {
+        if let diarizer { return diarizer }
+        let diarizer = DiarizationEngine()
+        try await diarizer.prepare()
+        self.diarizer = diarizer
+        return diarizer
+    }
+
+    /// The diarization timeline for one track, kept around after ASR so
+    /// speakers.json can report each speaker's total talk time (measured
+    /// from the diarization timeline itself, not the coarser ASR segments)
+    /// and voice embedding.
+    private struct TrackDiarization {
+        let timeline: [TimedSpeakerSegment]
+        let speakerDatabase: [String: [Float]]
+    }
+
+    /// One ASR segment before final speaker-label resolution: still tagged
+    /// with its track's fallback label and (if diarization ran) the
+    /// track-local cluster id it fell into.
+    private struct RawSegment {
+        let trackLabel: String
+        let localSpeakerId: String?
+        let start_ms: Int
+        let end_ms: Int
+        let text: String
+    }
+
+    /// Segments further than this from any detected speech span are left
+    /// unlabeled rather than snapped to the nearest speaker — matches the
+    /// silence-gap threshold ParakeetEngine already uses to break segments
+    /// (see ParakeetEngine.segments(from:)), so a gap long enough to end a
+    /// sentence is also long enough to stop guessing who's talking.
+    private static let maxSnapDistanceSeconds: Float = 1.0
+
+    /// The diarization cluster (if any) whose span contains this ASR
+    /// segment's midpoint, on the assumption that segment boundaries and
+    /// diarization boundaries won't align exactly. Falls back to the
+    /// nearest cluster by distance — but only within maxSnapDistanceSeconds,
+    /// so a segment that lands in real silence (e.g. an ASR hallucination
+    /// between two speakers' turns) isn't confidently misattributed to
+    /// whichever speaker happens to be closer in time.
+    private static func speakerId(
+        at segment: TranscriptSegment, in timeline: [TimedSpeakerSegment]
+    ) -> String? {
+        guard !timeline.isEmpty else { return nil }
+        let midpoint = Float((segment.start + segment.end) / 2)
+        if let contained = timeline.first(where: {
+            $0.startTimeSeconds <= midpoint && midpoint <= $0.endTimeSeconds
+        }) {
+            return contained.speakerId
+        }
+        func distance(_ span: TimedSpeakerSegment) -> Float {
+            if midpoint < span.startTimeSeconds { return span.startTimeSeconds - midpoint }
+            if midpoint > span.endTimeSeconds { return midpoint - span.endTimeSeconds }
+            return 0
+        }
+        guard let nearest = timeline.min(by: { distance($0) < distance($1) }) else { return nil }
+        return distance(nearest) <= maxSnapDistanceSeconds ? nearest.speakerId : nil
+    }
+
+    /// speakers.json: one entry per global speaker id actually used in the
+    /// transcript, ordered by "Speaker N". Sidecar to transcript.json rather
+    /// than inline, so the canonical transcript stays small — a later
+    /// speaker-naming pass reads this file's embeddings/talk time and
+    /// rewrites the `id` strings here and in transcript.json/.md.
+    private func writeSpeakers(
+        to dir: URL,
+        diarizations: [String: TrackDiarization],
+        globalIds: [String: String]
+    ) {
+        guard !globalIds.isEmpty else { return }
+        let entries = globalIds.sorted {
+            Self.speakerNumber($0.value) < Self.speakerNumber($1.value)
+        }
+        var infos: [SpeakerInfo] = []
+        for (key, globalId) in entries {
+            guard let separator = key.range(of: "::") else { continue }
+            let trackLabel = String(key[key.startIndex..<separator.lowerBound])
+            let localSpeakerId = String(key[separator.upperBound...])
+            guard let diarization = diarizations[trackLabel] else { continue }
+            let talkTimeMs = diarization.timeline
+                .filter { $0.speakerId == localSpeakerId }
+                .reduce(0.0) { $0 + Double($1.durationSeconds) * 1000 }
+            infos.append(SpeakerInfo(
+                id: globalId,
+                track: trackLabel == "me" ? "mic" : "system",
+                talk_time_ms: Int(talkTimeMs),
+                embedding: diarization.speakerDatabase[localSpeakerId] ?? []
+            ))
+        }
+        guard !infos.isEmpty else { return }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        try? encoder.encode(infos)
+            .write(to: dir.appendingPathComponent("speakers.json"), options: .atomic)
+    }
+
+    private static func speakerNumber(_ label: String) -> Int {
+        Int(label.split(separator: " ").last.map(String.init) ?? "") ?? 0
     }
 
     /// Fires the configured on_stop shell command with the session directory
@@ -227,6 +412,14 @@ private struct SessionMeta {
         }
         return SessionMeta(tracks: tracks)
     }
+}
+
+/// One entry in speakers.json. Property names are the JSON schema.
+private struct SpeakerInfo: Codable {
+    let id: String
+    let track: String
+    let talk_time_ms: Int
+    let embedding: [Float]
 }
 
 /// Canonical transcript. Property names are the JSON schema — this struct

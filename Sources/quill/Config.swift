@@ -5,6 +5,7 @@ import Foundation
 ///     {
 ///       "recordings_dir": "~/Recordings",
 ///       "transcription": { "enabled": true, "engine": "parakeet" },
+///       "diarization": { "enabled": true },
 ///       "mic_voice_processing": true,
 ///       "on_stop": "my-hook"
 ///     }
@@ -46,6 +47,17 @@ enum Config {
 
     private static func transcription() -> [String: Any]? {
         load()?["transcription"] as? [String: Any]
+    }
+
+    /// Whether tracks are diarized (split into per-speaker labels) during
+    /// transcription. Default on; disabling falls back to flat "me"/"them"
+    /// labels and skips the diarization model entirely.
+    static func diarizationEnabled() -> Bool {
+        diarization()?["enabled"] as? Bool ?? true
+    }
+
+    private static func diarization() -> [String: Any]? {
+        load()?["diarization"] as? [String: Any]
     }
 
     /// Apple voice processing (acoustic echo cancellation) on the mic, so

@@ -21,6 +21,7 @@ enum DoctorReport {
             checkSystemAudio(),
             checkRecordingsRoot(recordingsRoot),
             checkTranscription(),
+            checkDiarization(),
         ]
     }
 
@@ -93,6 +94,31 @@ enum DoctorReport {
         return Check(
             name: "transcription",
             status: .warn("parakeet models not downloaded (~600 MB)"),
+            remediation: "downloads automatically on first transcription — record a short test session while online"
+        )
+    }
+
+    /// Same "never discover a missing model after an important meeting"
+    /// concern as checkTranscription, for the offline diarizer's model repo.
+    /// FluidAudio has no modelsExist-style helper for this pipeline, so this
+    /// probes for its required files directly using FluidAudio's own public
+    /// path constants (Repo.diarizer.folderName, ModelNames.OfflineDiarizer)
+    /// rather than hardcoding the cache layout.
+    static func checkDiarization() -> Check {
+        guard Config.diarizationEnabled() else {
+            return Check(name: "diarization", status: .warn("disabled in config"), remediation: nil)
+        }
+        let modelsDir = OfflineDiarizerModels.defaultModelsDirectory()
+            .appendingPathComponent(Repo.diarizer.folderName, isDirectory: true)
+        let allPresent = ModelNames.OfflineDiarizer.requiredModels.allSatisfy {
+            FileManager.default.fileExists(atPath: modelsDir.appendingPathComponent($0).path)
+        }
+        if allPresent {
+            return Check(name: "diarization", status: .ok, remediation: nil)
+        }
+        return Check(
+            name: "diarization",
+            status: .warn("speaker-diarization models not downloaded"),
             remediation: "downloads automatically on first transcription — record a short test session while online"
         )
     }

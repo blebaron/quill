@@ -41,13 +41,13 @@ Each session lands in `~/Recordings/<yyyy.MM.dd-HHmm>/`:
 | `meta.json` | start/end timestamps, duration, per-track start offsets |
 | `transcript.json` | canonical transcript — engine provenance + timed, speaker-tagged segments |
 | `transcript.md` | the same transcript rendered for reading |
+| `speakers.json` | one entry per detected speaker — talk time + voice embedding (see Diarization) |
 | `transcribe.log` | transcription progress/errors for this session |
 
 Two tracks on purpose: speech models do better on clean single-source audio,
-and mic-vs-system is free two-party diarization — `me` vs `them` with no
-speaker-identification model. CAF on purpose: unlike m4a, it needs no
-finalization pass — if the process dies mid-meeting, everything already
-written is still readable.
+and mic-vs-system is a free first cut at diarization — `me` vs `them` with no
+model. CAF on purpose: unlike m4a, it needs no finalization pass — if the
+process dies mid-meeting, everything already written is still readable.
 
 ## Transcription
 
@@ -68,6 +68,29 @@ on next launch (the filesystem is the queue: a session with `meta.json` but no
 The engine sits behind a small protocol; a Whisper engine (WhisperKit
 large-v3-turbo) is planned as the fallback / re-transcription option.
 
+## Diarization
+
+Built in, on-device, automatic — each track (`mic.caf` and `system.caf`) is
+diarized separately via [FluidAudio](https://github.com/FluidInference/FluidAudio)'s
+offline pipeline (pyannote-based segmentation + embedding + clustering), so
+speakers are identified whether they're multiple people in the room on your
+mic, multiple people on the other end of a call, or both. Models (a small
+one-time download, well under Parakeet's 600MB) download on first use, same
+as transcription; `quill doctor` reports whether they're cached.
+
+Each ASR segment is relabeled from the track's flat `me`/`them` into
+`Speaker 1`, `Speaker 2`, etc. — numbered in order of first appearance across
+the whole conversation, not per track, so the numbering reads naturally
+regardless of which track someone spoke on. `speakers.json` holds the data
+behind those labels: each speaker's track, total talk time, and voice
+embedding — meant as the input to a separate speaker-naming step (not
+included here), which can match embeddings across sessions and rewrite the
+`Speaker N` ids into real names in `transcript.json`/`transcript.md`.
+
+If diarization fails or is disabled, quill falls back to the flat
+`me`/`them` labels and no `speakers.json` is written — never a hard failure
+for the rest of the transcript.
+
 ## Config
 
 Optional, at `~/.config/quill/config.json`:
@@ -76,6 +99,7 @@ Optional, at `~/.config/quill/config.json`:
 {
   "recordings_dir": "~/Recordings",
   "transcription": { "enabled": true, "engine": "parakeet" },
+  "diarization": { "enabled": true },
   "on_stop": "my-hook"
 }
 ```
@@ -83,6 +107,9 @@ Optional, at `~/.config/quill/config.json`:
 - `recordings_dir` — where sessions land. Resolution order: `--out` flag >
   config > `~/Recordings`.
 - `transcription.enabled` — set `false` to just record.
+- `diarization.enabled` — set `false` to skip per-speaker labeling (flat
+  `me`/`them` instead of `Speaker N`) and the diarization model download
+  entirely.
 - `mic_voice_processing` — Apple's echo cancellation on the mic (default off).
   Set `true` when recording meetings through the speakers, so playback doesn't
   bleed into the mic track and get transcribed twice as "me". The trade: while
@@ -112,6 +139,7 @@ quill install --uninstall
 - **AVAudioEngine** — mic capture
 - **AVAudioFile** — streaming AAC encode into CAF
 - **FluidAudio / Parakeet** — on-device Core ML transcription
+- **FluidAudio offline diarizer** — on-device Core ML speaker diarization
 - **NSStatusItem** — the whole UI
 
 ## Gotchas
