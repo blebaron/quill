@@ -95,6 +95,8 @@ final class AppController {
     private let transcription = TranscriptionCoordinator()
     private var session: RecordingSession?
     private var ticker: Timer?
+    private var reminderIntervalSeconds: TimeInterval = 0
+    private var nextReminderAt: TimeInterval = 0
 
     init(root: URL) {
         self.root = root
@@ -140,6 +142,9 @@ final class AppController {
         }
 
         menuBar.update(recording: true, elapsed: "0:00")
+        let reminderMinutes = Config.reminderIntervalMinutes()
+        reminderIntervalSeconds = reminderMinutes > 0 ? TimeInterval(reminderMinutes * 60) : 0
+        nextReminderAt = reminderIntervalSeconds
         ticker = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.tick() }
         }
@@ -176,10 +181,17 @@ final class AppController {
 
     private func tick() {
         guard let session else { return }
-        menuBar.update(
-            recording: true,
-            elapsed: Self.format(Date().timeIntervalSince(session.startedAt))
-        )
+        let elapsed = Date().timeIntervalSince(session.startedAt)
+        menuBar.update(recording: true, elapsed: Self.format(elapsed))
+
+        // Nothing else interrupts a long-forgotten recording, so nudge the
+        // user periodically instead of relying on them to notice the menu
+        // bar. reminderIntervalSeconds is 0 when disabled via config.
+        if reminderIntervalSeconds > 0, elapsed >= nextReminderAt {
+            FileHandle.standardError.write(Data("reminder · still recording · \(Self.format(elapsed))\n".utf8))
+            notifyUser(title: "quill — still recording", body: "still recording · \(Self.format(elapsed))")
+            nextReminderAt += reminderIntervalSeconds
+        }
     }
 
     private func openFolder() {

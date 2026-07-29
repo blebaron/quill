@@ -36,7 +36,7 @@ background pill (would need a custom-drawn `NSView` in place of the standard
 way to paint a background chip).
 
 ## Recording state reminder notification
-Status: idea
+Status: done
 
 Nothing currently interrupts you while a recording is running — `notifyUser`
 (`Notify.swift`) only fires on start failure and transcript-ready/failed

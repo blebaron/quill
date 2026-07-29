@@ -7,7 +7,8 @@ import Foundation
 ///       "transcription": { "enabled": true, "engine": "parakeet" },
 ///       "diarization": { "enabled": true },
 ///       "mic_voice_processing": true,
-///       "on_stop": "my-hook"
+///       "on_stop": "my-hook",
+///       "reminder_interval_minutes": 30
 ///     }
 ///
 /// Resolution order for the recordings root: --out flag > config file >
@@ -58,6 +59,14 @@ enum Config {
 
     private static func diarization() -> [String: Any]? {
         load()?["diarization"] as? [String: Any]
+    }
+
+    /// Minutes between "still recording" reminder notifications while a
+    /// session is active, or 0 to disable. Default 30 — long enough not to
+    /// be noisy, short enough that a forgotten recording doesn't run all day
+    /// unnoticed.
+    static func reminderIntervalMinutes() -> Int {
+        load()?["reminder_interval_minutes"] as? Int ?? 30
     }
 
     /// Apple voice processing (acoustic echo cancellation) on the mic, so
