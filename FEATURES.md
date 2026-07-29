@@ -15,7 +15,7 @@ embedding to match against a small set of known speakers.
 -->
 
 ## More visible menu bar recording indicator
-Status: idea
+Status: done
 
 Today the only always-visible signal that quill is recording is the feather
 icon's tint (red vs. default) — the elapsed timer and "recording"/"idle" text
