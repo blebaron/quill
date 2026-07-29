@@ -45,13 +45,25 @@ struct Run: ParsableCommand {
 
         let controller = AppController(root: root)
 
-        let sigint = DispatchSource.makeSignalSource(signal: SIGINT, queue: .main)
-        sigint.setEventHandler {
-            FileHandle.standardError.write(Data("\nshutting down\n".utf8))
-            MainActor.assumeIsolated { controller.shutdown() }
+        // SIGINT (Ctrl-C) is the interactive case; SIGTERM is what
+        // `launchctl`/shutdown/kill send to stop the LaunchAgent, and SIGHUP
+        // fires if a controlling terminal goes away out from under a
+        // manually-started process. All three used to fall through to the
+        // OS default (instant termination, no cleanup) — losing a
+        // recording's meta.json and orphaning its audio with no chance for
+        // the transcription queue to ever pick it up. Route all three
+        // through the same graceful shutdown as SIGINT.
+        var signalSources: [DispatchSourceSignal] = []
+        for sig in [SIGINT, SIGTERM, SIGHUP] {
+            let source = DispatchSource.makeSignalSource(signal: sig, queue: .main)
+            source.setEventHandler {
+                FileHandle.standardError.write(Data("\nshutting down\n".utf8))
+                MainActor.assumeIsolated { controller.shutdown() }
+            }
+            source.resume()
+            signal(sig, SIG_IGN)
+            signalSources.append(source)
         }
-        sigint.resume()
-        signal(SIGINT, SIG_IGN)
 
         FileHandle.standardError.write(Data(
             "quill up · recordings → \(root.path) · ^C to quit\n".utf8
