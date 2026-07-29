@@ -53,3 +53,63 @@ file. Consider auto-splitting into a new session folder at a time boundary
 transcribable chunks instead of one giant one. Distinct from the reminder
 notification above — this is about bounding the damage of a long recording,
 not about noticing it sooner.
+
+## Configurable reminder interval from the menu
+Status: idea
+
+The reminder notification above is only tunable by hand-editing
+`reminder_interval_minutes` in `~/.config/quill/config.json` (`Config.swift`)
+and restarting the daemon. Add a way to change it from the menu itself — e.g.
+a submenu on `toggleItem`'s neighbor with a few presets (15/30/60 min, Off) —
+so it's discoverable and doesn't need a config file or restart. Open
+question: does picking a value from the menu just override the in-memory
+`reminderIntervalSeconds` for the current run (resets to config/default on
+next launch), or should it write back to `config.json` so the choice sticks?
+The latter is more useful but means `MenuBarController` needs a way to
+persist config, which nothing does today.
+
+## Surface transcription status on the menu bar itself
+Status: idea
+
+`TranscriptionCoordinator.Status` (idle/transcribing/failed) only reaches the
+dropdown's `transcriptionLabel` via `MenuBarController.updateTranscription(_:)`
+— invisible until you open the menu, the same blind spot the recording
+indicator used to have. Add a lightweight cue on the button itself (e.g. a
+small badge or secondary glyph next to the feather) so a stuck or failed
+transcription doesn't go unnoticed. The tricky part: this has to coexist with
+the recording-state icon, since a new session can be recording while the
+previous one is still transcribing (`AppController` allows both at once) — a
+corner badge layered on top of the feather is probably safer than swapping
+the whole icon, which is already spoken for by recording state.
+
+## Speaker naming pass (persistent voice identity)
+Status: idea
+
+`speakers.json` (written per session by `TranscriptionCoordinator`, see
+CLAUDE.md) already carries a voice embedding per global speaker id —
+deliberately built as input for exactly this. Build a small persistent store
+(e.g. `~/.config/quill/known_speakers.json`) mapping a name to one or more
+reference embeddings. During each session's diarization pass, compare every
+speaker's embedding against the known store (cosine similarity above some
+threshold) and use the matched name in `transcript.json`/`speakers.json`
+instead of "Speaker N"; anything unmatched stays as Speaker N. Still needs a
+way to actually populate the store in the first place — likely a small CLI
+pass, e.g. `quill name-speaker <session> "Speaker 2" "Jane"`, that pulls the
+embedding out of that session's `speakers.json` and adds/updates the named
+entry.
+
+## Continuous recording with silence trimming
+Status: idea
+
+The "crazy idea" version of always-on: instead of a manual start/stop toggle,
+record continuously and use FluidAudio's VAD (already vendored — see
+CLAUDE.md's "External dependency" section; quill doesn't use it yet) to drop
+silent/no-speech stretches, security-camera style, so you're not storing
+hours of dead air. Builds on "Auto-split long recordings" above for bounding
+individual file size. Bigger in scope than the other three here — it changes
+the whole interaction model (the menu toggle becomes pause/resume, or goes
+away entirely) and needs an explicit retention policy (a rolling window,
+like a dashcam) since keeping everything forever isn't realistic for disk
+space or privacy. Worth a deliberate go/no-go conversation before scoping
+further — always-on mic + system-audio capture is a meaningfully different
+privacy posture than today's manually-started sessions.
