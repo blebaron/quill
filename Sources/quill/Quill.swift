@@ -30,6 +30,7 @@ struct Run: ParsableCommand {
     @MainActor
     private func runMain() throws {
         let root = Config.resolveRoot(cliOverride: out)
+        RecordingsAgentsDoc.ensureUpToDate(root: root)
 
         // Non-blocking: permissions prompt on first recording, so warnings at
         // startup are informational, not fatal.
