@@ -113,3 +113,22 @@ like a dashcam) since keeping everything forever isn't realistic for disk
 space or privacy. Worth a deliberate go/no-go conversation before scoping
 further — always-on mic + system-audio capture is a meaningfully different
 privacy posture than today's manually-started sessions.
+
+## Auto-detect forgotten-recording tail and trim transcript
+Status: idea
+
+Easy to forget to stop a recording after everyone's left — the session keeps
+capturing you talking to yourself (or dead air) for several more minutes,
+which then shows up in the transcript as a run of low-confidence, fragmented
+`me`-only segments. `TranscriptionCoordinator` already computes a full
+per-speaker timeline during diarization (see CLAUDE.md's transcription
+pipeline section), so detecting this post-hoc is cheap: walk the mic track's
+timeline backward from the end and find the last point where two or more
+distinct speakers actually alternate. Mark everything after that point as a
+likely tail — either drop it from `transcript.json`/`transcript.md` or write
+a `likely_ended_at` timestamp into `meta.json` for confirmation before acting
+on it. Deliberately non-destructive: this only changes what's rendered into
+the transcript, never touches the source `.caf` files, so a wrong guess costs
+nothing. Distinct from "Continuous recording with silence trimming" above —
+that's a real-time VAD-driven capture redesign; this is a one-shot heuristic
+over data the pipeline already produces.
