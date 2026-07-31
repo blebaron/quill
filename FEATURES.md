@@ -110,7 +110,7 @@ ground truth (e.g. "there were only 2 people on this call") to check or
 correct the diarization output against.
 
 ## Transcript-level echo suppression (mic track picking up system audio)
-Status: idea
+Status: done
 
 `mic_voice_processing` was meant to stop system audio bleeding into the "me"
 track when recording without headphones, but enabling it can steal the mic
