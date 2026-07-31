@@ -78,6 +78,16 @@ enum Config {
         load()?["mic_voice_processing"] as? Bool ?? false
     }
 
+    /// Suppress transcript segments where the mic track just picked up
+    /// acoustic echo of the system track played through speakers (no
+    /// headphones) — compares mic segments against overlapping system-track
+    /// text and drops close matches from transcript.md only, never
+    /// transcript.json. Default on: it's a pure rendering filter over text
+    /// already produced, never touches recorded audio.
+    static func echoSuppressionEnabled() -> Bool {
+        load()?["echo_suppression"] as? Bool ?? true
+    }
+
     /// Parse the config file. A malformed config is reported on stderr rather
     /// than silently ignored — recordings landing in an unexpected place is
     /// worse than a warning.

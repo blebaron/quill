@@ -228,6 +228,9 @@ actor TranscriptionCoordinator {
             }
         }
         raw.sort { $0.start_ms < $1.start_ms }
+        let echoFlags = Config.echoSuppressionEnabled()
+            ? Self.detectEcho(in: raw)
+            : [Bool](repeating: false, count: raw.count)
 
         // Assign "Speaker N" in order of first appearance across the whole
         // chronological transcript, not per-track — so numbering reads
@@ -237,7 +240,7 @@ actor TranscriptionCoordinator {
         var globalIds: [String: String] = [:]
         var nextSpeakerNumber = 1
         var merged: [Transcript.Segment] = []
-        for segment in raw {
+        for (index, segment) in raw.enumerated() {
             let speaker: String
             if let localSpeakerId = segment.localSpeakerId {
                 let key = "\(segment.trackLabel)::\(localSpeakerId)"
@@ -254,7 +257,7 @@ actor TranscriptionCoordinator {
             }
             merged.append(Transcript.Segment(
                 speaker: speaker, start_ms: segment.start_ms, end_ms: segment.end_ms,
-                text: segment.text
+                text: segment.text, echo: echoFlags[index] ? true : nil
             ))
         }
 
@@ -342,6 +345,69 @@ actor TranscriptionCoordinator {
         }
         guard let nearest = timeline.min(by: { distance($0) < distance($1) }) else { return nil }
         return distance(nearest) <= maxSnapDistanceSeconds ? nearest.speakerId : nil
+    }
+
+    /// How far apart two tracks' segments can start/end and still be
+    /// considered the same moment. The mic and system tracks are
+    /// transcribed independently and won't split into matching segment
+    /// boundaries, so this has to be generous — wider than
+    /// maxSnapDistanceSeconds above, which only nudges a single segment to
+    /// the nearest diarization cluster rather than aligning two whole
+    /// independent transcripts.
+    private static let echoWindowToleranceSeconds: Double = 1.5
+
+    /// Fraction of a mic segment's words that must also appear in the
+    /// overlapping system-track window for it to count as echo, not an
+    /// exact-match requirement since the two tracks' ASR passes transcribe
+    /// the same audio slightly differently. Below this, the segment likely
+    /// has substantial content of its own (a real interruption or
+    /// backchannel during someone else's speech) and is left alone even if
+    /// it partly overlaps — see the trade-off note in detectEcho below.
+    private static let echoContainmentThreshold: Double = 0.7
+
+    /// True per raw segment (aligned by index) if it's very likely acoustic
+    /// echo: the mic picking up system audio played through speakers,
+    /// rather than something the local speaker actually said. Compares each
+    /// mic-track ("me") segment's words against every system-track ("them")
+    /// segment overlapping it in time (widened by
+    /// echoWindowToleranceSeconds) and flags it when most of its words show
+    /// up there too.
+    ///
+    /// Deliberately imprecise for very short common backchannel words
+    /// ("yeah", "okay", "right") — a genuine independent utterance and true
+    /// echo read identically as text, so a real short backchannel said at
+    /// the same moment as its echo will sometimes get suppressed too.
+    /// Accepted trade-off: the alternative, on an un-headphoned session, is
+    /// near-total duplication of the transcript (see FEATURES.md).
+    private static func detectEcho(in raw: [RawSegment]) -> [Bool] {
+        let toleranceMs = Int(echoWindowToleranceSeconds * 1000)
+        let themSegments = raw.filter { $0.trackLabel == "them" }
+        guard !themSegments.isEmpty else { return [Bool](repeating: false, count: raw.count) }
+
+        return raw.map { segment in
+            guard segment.trackLabel == "me" else { return false }
+            let windowStart = segment.start_ms - toleranceMs
+            let windowEnd = segment.end_ms + toleranceMs
+            let windowTokens = Set(themSegments
+                .filter { $0.end_ms >= windowStart && $0.start_ms <= windowEnd }
+                .flatMap { tokenize($0.text) })
+            guard !windowTokens.isEmpty else { return false }
+
+            let micTokens = tokenize(segment.text)
+            guard !micTokens.isEmpty else { return false }
+            let matched = micTokens.filter { windowTokens.contains($0) }.count
+            return Double(matched) / Double(micTokens.count) >= echoContainmentThreshold
+        }
+    }
+
+    /// Lowercased word tokens, punctuation stripped — enough normalization
+    /// to compare two independent ASR passes over the same audio without
+    /// pulling in a string-similarity dependency for what's just a rough
+    /// containment check.
+    private static func tokenize(_ text: String) -> [String] {
+        text.lowercased()
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { !$0.isEmpty }
     }
 
     /// speakers.json: one entry per global speaker id actually used in the
@@ -476,6 +542,11 @@ private struct Transcript: Codable {
         let start_ms: Int
         let end_ms: Int
         let text: String
+        /// Present (and true) only when detectEcho flagged this as likely
+        /// acoustic echo of the system track. Kept in transcript.json even
+        /// though rendered(title:) skips it, so nothing is destroyed — only
+        /// the readable view is filtered.
+        let echo: Bool?
     }
 
     let engine: String
@@ -497,7 +568,7 @@ private struct Transcript: Codable {
 
     private func rendered(title: String) -> String {
         var lines = ["# \(title)", "", "engine: \(engine) (\(model))", ""]
-        for seg in segments {
+        for seg in segments where seg.echo != true {
             lines.append("**[\(Self.clock(seg.start_ms))] \(seg.speaker):** \(seg.text)")
             lines.append("")
         }
