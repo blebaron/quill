@@ -21,6 +21,7 @@ actor TranscriptionCoordinator {
 
     private var queue: [URL] = []
     private var draining = false
+    private var inFlight: URL?
     private var engine: TranscriptionEngine?
     private var diarizer: DiarizationEngine?
     private var lastFailure: String?
@@ -43,9 +44,13 @@ actor TranscriptionCoordinator {
 
     /// Scan the recordings root for sessions that finished (meta.json exists)
     /// but were never transcribed. Folder names sort chronologically, so
-    /// oldest-first is a name sort.
+    /// oldest-first is a name sort. Safe to call repeatedly — e.g. a periodic
+    /// re-scan to pick up sessions dropped in externally (a mobile companion
+    /// syncing via iCloud Drive, say) rather than created by this process —
+    /// since it skips anything already queued or mid-transcription.
     func resumePending(root: URL) {
         guard Config.transcriptionEnabled() else { return }
+        Self.repackageFlatDrops(root: root)
         guard let entries = try? FileManager.default.contentsOfDirectory(
             at: root, includingPropertiesForKeys: nil
         ) else { return }
@@ -57,7 +62,7 @@ actor TranscriptionCoordinator {
                     && !fm.fileExists(atPath: $0.appendingPathComponent("transcript.json").path)
             }
             .sorted { $0.lastPathComponent < $1.lastPathComponent }
-        for dir in pending where !queue.contains(dir) {
+        for dir in pending where !queue.contains(dir) && dir != inFlight {
             queue.append(dir)
         }
         if !pending.isEmpty {
@@ -66,6 +71,45 @@ actor TranscriptionCoordinator {
             ))
         }
         drainIfIdle()
+    }
+
+    /// Some drop-in sources (a mobile companion Shortcut, notably) can't
+    /// create nested folders reliably, only flat files with a variable
+    /// filename — so they land as `<name>__mic.m4a` / `<name>__meta.json`
+    /// siblings directly in the recordings root instead of inside a
+    /// `<name>/` folder. Group any such pairs and move them into a proper
+    /// session folder (preserving each file's own name, since meta.json's
+    /// `files` entries reference them by exact name) so the normal scan
+    /// below treats them like any other session.
+    private static func repackageFlatDrops(root: URL) {
+        let fm = FileManager.default
+        guard let entries = try? fm.contentsOfDirectory(
+            at: root, includingPropertiesForKeys: nil
+        ) else { return }
+
+        let metaSuffix = "__meta.json"
+        for metaFile in entries where metaFile.lastPathComponent.hasSuffix(metaSuffix) {
+            let name = String(metaFile.lastPathComponent.dropLast(metaSuffix.count))
+            guard !name.isEmpty else { continue }
+
+            let sessionDir = root.appendingPathComponent(name, isDirectory: true)
+            guard !fm.fileExists(atPath: sessionDir.path) else { continue }
+
+            let siblings = entries.filter {
+                $0 != metaFile && $0.lastPathComponent.hasPrefix(name + "__")
+            }
+            guard !siblings.isEmpty else { continue }
+
+            do {
+                try fm.createDirectory(at: sessionDir, withIntermediateDirectories: true)
+                for file in siblings {
+                    try fm.moveItem(at: file, to: sessionDir.appendingPathComponent(file.lastPathComponent))
+                }
+                try fm.moveItem(at: metaFile, to: sessionDir.appendingPathComponent("meta.json"))
+            } catch {
+                FileHandle.standardError.write(Data("failed to repackage \(name): \(error)\n".utf8))
+            }
+        }
     }
 
     // MARK: -
@@ -80,6 +124,7 @@ actor TranscriptionCoordinator {
     private func drain() async {
         while !queue.isEmpty {
             let dir = queue.removeFirst()
+            inFlight = dir
             publish(.transcribing(session: dir.lastPathComponent, queued: queue.count))
             do {
                 try await transcribe(dir)
@@ -93,6 +138,7 @@ actor TranscriptionCoordinator {
                     body: "\(dir.lastPathComponent) — see transcribe.log"
                 )
             }
+            inFlight = nil
         }
         await engine?.release()
         engine = nil

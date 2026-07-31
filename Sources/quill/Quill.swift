@@ -96,8 +96,16 @@ final class AppController {
     private let transcription = TranscriptionCoordinator()
     private var session: RecordingSession?
     private var ticker: Timer?
+    private var watchTimer: Timer?
     private var reminderIntervalSeconds: TimeInterval = 0
     private var nextReminderAt: TimeInterval = 0
+
+    /// How often to re-scan the recordings root for sessions this process
+    /// didn't create itself — e.g. a mobile companion dropping a folder in
+    /// via iCloud Drive sync. `resumePending` only runs at launch otherwise,
+    /// so without this a synced-in session would sit untranscribed until the
+    /// next restart.
+    private static let watchIntervalSeconds: TimeInterval = 30
 
     init(root: URL) {
         self.root = root
@@ -114,12 +122,22 @@ final class AppController {
             }
             await transcription.resumePending(root: root)
         }
+
+        watchTimer = Timer.scheduledTimer(withTimeInterval: Self.watchIntervalSeconds, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.scanForExternalSessions() }
+        }
     }
 
     /// Stop any live session cleanly (finalizing files) and exit.
     func shutdown() {
+        watchTimer?.invalidate()
+        watchTimer = nil
         stopSession()
         NSApp.terminate(nil)
+    }
+
+    private func scanForExternalSessions() {
+        Task { [transcription, root] in await transcription.resumePending(root: root) }
     }
 
     private func toggle() {
