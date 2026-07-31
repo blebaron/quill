@@ -10,6 +10,12 @@ import Foundation
 /// left over from an older quill build gets overwritten on next launch,
 /// while a byte-identical file (or a user's own edits, once they've bumped
 /// past the current version some other way) is left alone.
+///
+/// Keep this in sync with `TranscriptionCoordinator.swift`'s `Transcript`/
+/// `Transcript.Segment` schema and `rendered(title:)` — this doc is the only
+/// place that schema is explained to whoever/whatever reads a recordings
+/// folder next, so a change on one side that doesn't land here goes
+/// unnoticed rather than causing an error.
 enum RecordingsAgentsDoc {
     static let filename = "AGENTS.md"
 

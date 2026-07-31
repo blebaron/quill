@@ -535,7 +535,11 @@ private struct SpeakerInfo: Codable {
 }
 
 /// Canonical transcript. Property names are the JSON schema — this struct
-/// exists to be serialized.
+/// exists to be serialized. If you change these fields, what they mean, or
+/// what rendered(title:) below filters out of transcript.md, also update
+/// RecordingsAgentsDoc.swift's `content` (and bump its `version`) — that's
+/// the schema description handed to any other agent pointed at a recordings
+/// folder, and it goes stale silently otherwise.
 private struct Transcript: Codable {
     struct Segment: Codable {
         let speaker: String
