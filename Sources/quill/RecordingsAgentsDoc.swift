@@ -31,7 +31,7 @@ enum RecordingsAgentsDoc {
         return Int(digits.trimmingCharacters(in: .whitespaces))
     }
 
-    private static let version = 1
+    private static let version = 2
     private static let versionPrefix = "<!-- quill:agents-doc-version:"
     private static let versionSuffix = "-->"
 
@@ -76,6 +76,13 @@ enum RecordingsAgentsDoc {
         actual meeting ended, not meaningful content — treat it as noise unless
         context says otherwise.
 
+        **Missing lines are intentional.** Recording without headphones means the mic
+        also picks up whatever the speakers are playing, so far-end speech would
+        otherwise show up twice — once from the system track, again a moment later
+        as apparent mic speech. quill detects these and omits them here; see
+        `transcript.json`'s `echo` field below if you need the raw, undeduplicated
+        version.
+
         ## `transcript.json` — same content, structured
 
         ```json
@@ -84,13 +91,19 @@ enum RecordingsAgentsDoc {
           "engine": "parakeet",
           "model": "parakeet-tdt-0.6b-v2-coreml",
           "segments": [
-            {"start_ms": 310, "end_ms": 1910, "speaker": "me", "text": "..."}
+            {"start_ms": 310, "end_ms": 1910, "speaker": "me", "text": "..."},
+            {"start_ms": 2130, "end_ms": 2400, "speaker": "Speaker 1", "text": "...", "echo": true}
           ]
         }
         ```
 
         Use this over the `.md` if you need to do timestamp math or filter/aggregate
         programmatically — one segment per object, same speaker labels as above.
+        Unlike `transcript.md`, this includes every segment: `echo: true` marks ones
+        quill judged to be acoustic echo of the other track rather than real local
+        speech (see above). Skip those too unless you specifically need the raw
+        view — the key is only present at all when true, so absence means "not
+        flagged as echo," not "confirmed real."
 
         ## Other files, only if you need them
 
