@@ -98,6 +98,49 @@ pass, e.g. `quill name-speaker <session> "Speaker 2" "Jane"`, that pulls the
 embedding out of that session's `speakers.json` and adds/updates the named
 entry.
 
+## Diarization speaker count doesn't match actual attendees
+Status: idea
+
+On a known 2-person call (Brian + Troy Tomkinson, session `2026.07.30-1429`),
+diarization produced 3 clusters — `me` plus two separate `Speaker N` labels —
+instead of 2. Untangling which lines actually belonged to which real
+attendee took multiple rounds of manual transcript review before Brian could
+confirm identities. There's currently no way to give the pipeline a known
+ground truth (e.g. "there were only 2 people on this call") to check or
+correct the diarization output against.
+
+## Transcript-level echo suppression (mic track picking up system audio)
+Status: idea
+
+`mic_voice_processing` was meant to stop system audio bleeding into the "me"
+track when recording without headphones, but enabling it can steal the mic
+from other apps' own voice processing — a live Teams call lost its mic
+entirely the moment a recording with this flag on started (2026-07-31,
+Brian + Daniel). See `.issues/rca-001-voice-processing-silent-mic.md` and
+`Config.swift`'s default-off comment; the setting is staying off. The safer
+fix is to leave voice processing off entirely and suppress the echo after
+the fact instead, using audio quill already records independently.
+
+`TranscriptionCoordinator.transcribe(_:)` collects `raw` segments from both
+tracks separately (mic → "me", system → "them") before merging them by
+timestamp (`TranscriptionCoordinator.swift:217-230`). Right around that
+merge, compare each mic-track segment against system-track segments that
+overlap it in time; where the mic segment's text is a close fuzzy match to
+the overlapping system segment's text, it's very likely acoustic echo of the
+far end rather than something the local speaker actually said — drop it, or
+flag it, instead of keeping it as a "me" line.
+
+Open questions: what similarity metric/threshold to use (needs real echoey
+sessions to tune against — normalized-text edit distance is the obvious
+start, but the two tracks' ASR passes may transcribe the same audio
+differently, so something looser may be needed); whether to drop the
+segment outright or keep it with an `"echo": true` flag for review rather
+than silently deleting text, in the same non-destructive spirit as "Auto-detect
+forgotten-recording tail" below; and whether it needs to cross-check against
+`Speaker N` identity once diarization is enabled, so it doesn't eat a real
+"me" line that happens to echo back the same short phrase (e.g. agreeing
+"yeah, yeah").
+
 ## Continuous recording with silence trimming
 Status: idea
 
