@@ -37,7 +37,7 @@ enum RecordingsAgentsDoc {
         return Int(digits.trimmingCharacters(in: .whitespaces))
     }
 
-    private static let version = 2
+    private static let version = 3
     private static let versionPrefix = "<!-- quill:agents-doc-version:"
     private static let versionSuffix = "-->"
 
@@ -110,6 +110,32 @@ enum RecordingsAgentsDoc {
         speech (see above). Skip those too unless you specifically need the raw
         view — the key is only present at all when true, so absence means "not
         flagged as echo," not "confirmed real."
+
+        ## If everyone shows up as one `Speaker N`
+
+        Diarization can badly under-count on a single mic track with several
+        people in the room — a whole meeting sometimes collapses into one
+        `Speaker 1`, even though the transcript text clearly has multiple
+        people talking (different names addressed, back-and-forth turns,
+        distinct topics/opinions). `speakers.json` having only one entry with
+        most of the session's talk time is the tell. This is a known
+        diarization limitation, not something wrong with the recording itself
+        — see `.issues/rca-002-diarization-speaker-collapse.md` in the quill
+        repo for why.
+
+        If you're confident this happened and you know (or can ask) the
+        actual number of distinct voices, you can trigger a fix:
+
+        ```
+        quill rediarize <session-dir> --mic-speakers <n> [--system-speakers <n>]
+        ```
+
+        This re-runs diarization for that session with the given count forced
+        (bypassing the automatic detection that got it wrong) and overwrites
+        `transcript.json`/`transcript.md`/`speakers.json` in place. Only do
+        this with a real headcount you're confident in — an exact count
+        forces a re-cluster to exactly that many speakers even if it's wrong,
+        so guessing can make the transcript worse, not better.
 
         ## Other files, only if you need them
 
