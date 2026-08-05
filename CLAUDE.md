@@ -21,14 +21,40 @@ or a symlink to the same path) requires `sudo`, so it isn't part of the
 normal edit/build loop — only do it when the user asks to actually try the
 built binary end-to-end.
 
+**If quill is running as a LaunchAgent** (`~/Library/LaunchAgents/com.digimata.quill.plist`,
+typically symlinked to this repo's `.build/release/quill`), rebuilding does
+**not** make it pick up your changes — a running process keeps executing the
+old in-memory code indefinitely, even after the binary on disk is replaced.
+If a change needs to be live in the real daemon (not just build-verified),
+restart it explicitly and confirm the restart actually took:
+
+```sh
+launchctl kickstart -k gui/$(id -u)/com.digimata.quill
+ps aux | grep "[q]uill run"   # confirm a new PID, not the old one
+```
+
+`launchctl print gui/$(id -u)/com.digimata.quill` (look at `state` and
+`successive crashes`) is the fastest way to tell if it's actually running vs.
+crash-looping and backing off silently.
+
+**Before considering a change to `Quill.swift`'s command tree done, launch
+`quill run` itself** (not just whichever subcommand you touched) and confirm
+it doesn't immediately exit — `Run.run()`'s `MainActor.assumeIsolated` call
+assumes synchronous, main-thread `ParsableCommand` dispatch, and silently
+trips `SIGTRAP` if any part of the subcommand tree becomes an
+`AsyncParsableCommand` (mixing in an async subcommand, e.g. one added to
+shell out to an actor, has done this before). Bridge async work inside a
+subcommand's own `run()` — e.g. a `Task` + `DispatchSemaphore` — instead of
+converting the top-level command async.
+
 ## Architecture
 
 Single-binary macOS menu-bar app (`NSStatusItem`, `.accessory` activation
 policy — no dock icon, no windows). Entry point is `Quill.swift`
-(`ArgumentParser` with `run`/`doctor`/`install` subcommands, `run` is
-default). `AppController` (`@MainActor`, in `Quill.swift`) owns the menu bar,
-the current `RecordingSession`, and the elapsed-time ticker — all recording
-state transitions happen there.
+(`ArgumentParser` with `run`/`doctor`/`install`/`rediarize` subcommands, `run`
+is default). `AppController` (`@MainActor`, in `Quill.swift`) owns the menu
+bar, the current `RecordingSession`, and the elapsed-time ticker — all
+recording state transitions happen there.
 
 ### Recording
 
@@ -79,7 +105,17 @@ mid-transcription just retries next run. Per-session flow in `transcribe(_:)`:
    midpoint, then a **global** speaker id (`"Speaker 1"`, `"Speaker 2"`, ...)
    is assigned in chronological order of first appearance across *both*
    tracks, keyed by `(trackLabel, localSpeakerId)`. A track with diarization
-   disabled/failed keeps its flat `me`/`them` label instead.
+   disabled/failed keeps its flat `me`/`them` label instead. **Per-track
+   diarization exists specifically to split a single track with multiple
+   people talking into it** (an in-person meeting captured entirely on the
+   mic, say) **into real speaker counts — not just to add names on top of the
+   mic=me/system=them split.** FluidAudio's automatic speaker-count detection
+   can still badly under-count a busy single-mic track (a whole room
+   collapsing into one `Speaker 1`) in a way `minSpeakers`/clustering
+   threshold don't fix — see `.issues/rca-002-diarization-speaker-collapse.md`
+   and the `quill rediarize --mic-speakers <n>` CLI escape hatch
+   (`TranscriptionCoordinator.reprocess`) for when that happens and the
+   headcount is known.
 4. Segments from both tracks are offset-shifted, merged by timestamp, and
    written as `transcript.json` (canonical) + `transcript.md` (rendered).
    `speakers.json` is a sidecar with one entry per global speaker id actually
@@ -108,6 +144,8 @@ reference in `DiarizationEngine`; this is safe only because
 - `MenuBarController.swift` — the entire UI. Feather icon is an inlined SVG (no resource bundle, keeps this a true single-binary install).
 - `Install.swift` — writes/removes a plain `~/Library/LaunchAgents` plist and bootstraps it via `launchctl`. Deliberately not `SMAppService.mainApp`, which requires a full `.app` bundle.
 - `Notify.swift` — user notifications via `osascript display notification`, not `UserNotifications`, again to avoid needing an app bundle/entitlement.
+- `RecordingsAgentsDoc.swift` — writes/refreshes `AGENTS.md` in the recordings root at daemon startup (`Run.runMain()` only — no other entry point calls it, so a change here isn't visible until the daemon restarts; see the LaunchAgent note above). Versioned via a leading HTML comment; bump `version` whenever the schema it documents (or a new escape hatch like `rediarize`) changes. Keep in sync with `Transcript`/`Transcript.Segment` in `TranscriptionCoordinator.swift`.
+- `Quill.swift`'s `Rediarize` subcommand + `TranscriptionCoordinator.reprocess(_:speakerCountOverrides:)` — manual, on-demand re-diarization for one session with a known speaker count, for when automatic diarization collapses a busy mic track into one speaker (see the diarization pipeline note above and `.issues/rca-002-diarization-speaker-collapse.md`).
 
 ### External dependency: FluidAudio
 
