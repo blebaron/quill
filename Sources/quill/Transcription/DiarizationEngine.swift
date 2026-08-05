@@ -46,4 +46,33 @@ actor DiarizationEngine {
     func release() async {
         manager = nil
     }
+
+    /// Diarize a track with an explicit, known speaker count instead of
+    /// letting FluidAudio detect it automatically.
+    ///
+    /// FluidAudio's automatic speaker-count detection can badly under-count
+    /// on a busy, single-mic recording (a whole room collapsed to one
+    /// "Speaker 1"), and its `minSpeakers`/`maxSpeakers` hints don't reliably
+    /// fix it — the safety net that's supposed to catch this compares against
+    /// the pre-EM warm-start cluster count, not the number of speakers VBx's
+    /// own EM step decides actually have meaningful support, so a mismatch
+    /// between the two goes uncaught. Only an exact `numSpeakers` reliably
+    /// forces a re-cluster. See `.issues/rca-002-diarization-speaker-collapse.md`
+    /// for the full investigation.
+    ///
+    /// There's no way to know the right count ahead of time for a passive
+    /// recording, so this isn't wired into the normal per-session pipeline —
+    /// it's the engine underneath the manual `quill rediarize` CLI path,
+    /// used once a human (or an agent reading the transcript) knows the
+    /// headcount. Builds its own manager rather than reusing the shared,
+    /// lazily-prepared instance above, since `OfflineDiarizerManager`'s
+    /// config is fixed for its lifetime — an acceptable extra model load for
+    /// this rare, manual path.
+    static func diarizeWithKnownSpeakerCount(
+        _ audio: URL, count: Int
+    ) async throws -> DiarizationResult {
+        let manager = OfflineDiarizerManager(config: .default.withSpeakers(exactly: count))
+        try await manager.prepareModels()
+        return try await manager.process(audio)
+    }
 }

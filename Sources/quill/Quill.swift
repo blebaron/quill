@@ -7,7 +7,7 @@ struct Quill: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "quill",
         abstract: "Local meeting recorder + transcriber. Records mic and system audio as two tracks, then transcribes on-device.",
-        subcommands: [Run.self, Doctor.self, Install.self],
+        subcommands: [Run.self, Doctor.self, Install.self, Rediarize.self],
         defaultSubcommand: Run.self
     )
 }
@@ -70,6 +70,68 @@ struct Run: ParsableCommand {
             "quill up · recordings → \(root.path) · ^C to quit\n".utf8
         ))
         app.run()
+    }
+}
+
+/// Re-runs diarization for one already-transcribed session with a known
+/// speaker count, when FluidAudio's automatic detection got it wrong (most
+/// visibly: a whole room of people collapsed into a single "Speaker 1" — see
+/// `.issues/rca-002-diarization-speaker-collapse.md`). Overwrites
+/// transcript.json/transcript.md/speakers.json for that session; the audio
+/// isn't re-recorded, only re-diarized (mic and system tracks are still
+/// re-transcribed, since ASR and diarization run together per track).
+struct Rediarize: ParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "rediarize",
+        abstract: "Re-run diarization for one session with a known speaker count."
+    )
+
+    @Argument(help: "Path to the session folder, e.g. ~/Recordings/2026.08.05-1104.")
+    var session: String
+
+    @Option(name: .long, help: "Exact number of distinct voices on the mic track.")
+    var micSpeakers: Int?
+
+    @Option(name: .long, help: "Exact number of distinct voices on the system-audio track.")
+    var systemSpeakers: Int?
+
+    func run() throws {
+        guard micSpeakers != nil || systemSpeakers != nil else {
+            throw ValidationError("pass --mic-speakers and/or --system-speakers")
+        }
+
+        let dir = URL(fileURLWithPath: session).standardizedFileURL
+        guard FileManager.default.fileExists(atPath: dir.appendingPathComponent("meta.json").path) else {
+            throw ValidationError("no meta.json in \(dir.path) — is this a session folder?")
+        }
+
+        var overrides: [String: Int] = [:]
+        if let micSpeakers { overrides["me"] = micSpeakers }
+        if let systemSpeakers { overrides["them"] = systemSpeakers }
+
+        FileHandle.standardError.write(Data("rediarizing \(dir.lastPathComponent)…\n".utf8))
+
+        // `quill`'s subcommand tree stays synchronous (Run.run() depends on
+        // being invoked on the main thread — see its assumeIsolated comment)
+        // so this bridges out to the coordinator's async API with a
+        // semaphore rather than making the whole tree async.
+        final class ResultBox: @unchecked Sendable {
+            var error: Error?
+        }
+        let result = ResultBox()
+        let semaphore = DispatchSemaphore(value: 0)
+        Task {
+            do {
+                try await TranscriptionCoordinator().reprocess(dir, speakerCountOverrides: overrides)
+            } catch {
+                result.error = error
+            }
+            semaphore.signal()
+        }
+        semaphore.wait()
+        if let error = result.error { throw error }
+
+        print("done — \(dir.appendingPathComponent("transcript.md").path)")
     }
 }
 

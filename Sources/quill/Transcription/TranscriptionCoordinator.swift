@@ -140,10 +140,7 @@ actor TranscriptionCoordinator {
             }
             inFlight = nil
         }
-        await engine?.release()
-        engine = nil
-        await diarizer?.release()
-        diarizer = nil
+        await releaseEngines()
         publish(lastFailure.map { .failed(session: $0) } ?? .idle)
         draining = false
         // An enqueue that landed between the loop exiting and the release
@@ -151,12 +148,40 @@ actor TranscriptionCoordinator {
         drainIfIdle()
     }
 
-    private func transcribe(_ dir: URL) async throws {
+    /// Re-run transcription + diarization for one session outside the normal
+    /// queue, with an explicit speaker count for one or both tracks (keyed by
+    /// "me"/"them") — the engine underneath the `quill rediarize` CLI, for
+    /// when a human (or an agent reading the transcript) knows the headcount
+    /// that FluidAudio's automatic detection got wrong. Always overwrites
+    /// transcript.json/transcript.md/speakers.json for this session, and runs
+    /// regardless of `diarization.enabled` in config — an explicit request
+    /// like this overrides that default.
+    func reprocess(_ dir: URL, speakerCountOverrides: [String: Int]) async throws {
+        do {
+            try await transcribe(dir, speakerCountOverrides: speakerCountOverrides)
+        } catch {
+            await releaseEngines()
+            throw error
+        }
+        await releaseEngines()
+    }
+
+    private func releaseEngines() async {
+        await engine?.release()
+        engine = nil
+        await diarizer?.release()
+        diarizer = nil
+    }
+
+    private func transcribe(_ dir: URL, speakerCountOverrides: [String: Int] = [:]) async throws {
         let meta = try SessionMeta.read(from: dir)
         let engine = try await preparedEngine()
 
+        // Only need the shared, automatic diarizer for tracks that aren't
+        // getting an explicit override below.
+        let needsAutoDiarizer = meta.tracks.contains { speakerCountOverrides[$0.speaker] == nil }
         var diarizer: DiarizationEngine?
-        if Config.diarizationEnabled() {
+        if needsAutoDiarizer, Config.diarizationEnabled() {
             do {
                 diarizer = try await preparedDiarizer()
             } catch {
@@ -183,8 +208,11 @@ actor TranscriptionCoordinator {
             // directly) keeps each loop iteration's async-let independent of
             // the others in the eyes of the region-isolation checker.
             let trackDiarizer = diarizer
+            let overrideCount = speakerCountOverrides[track.speaker]
             async let segmentsTask = engine.transcribe(audio)
-            async let diarizationTask: DiarizationResult? = trackDiarizer?.diarize(audio)
+            async let diarizationTask: DiarizationResult? = Self.diarize(
+                audio, overrideCount: overrideCount, fallback: trackDiarizer
+            )
 
             // One bad track (empty, truncated) shouldn't cost us the other's
             // transcript — log it and keep going.
@@ -292,6 +320,17 @@ actor TranscriptionCoordinator {
         try await diarizer.prepare()
         self.diarizer = diarizer
         return diarizer
+    }
+
+    /// Diarizes one track, preferring an explicit speaker-count override
+    /// (`quill rediarize`) over the shared automatic diarizer.
+    private static func diarize(
+        _ audio: URL, overrideCount: Int?, fallback: DiarizationEngine?
+    ) async throws -> DiarizationResult? {
+        if let overrideCount {
+            return try await DiarizationEngine.diarizeWithKnownSpeakerCount(audio, count: overrideCount)
+        }
+        return try await fallback?.diarize(audio)
     }
 
     /// The diarization timeline for one track, kept around after ASR so
