@@ -11,10 +11,10 @@ swift build -c release          # release build — always use this for actually
 .build/release/quill run --out <dir>   # run the menu-bar daemon against a scratch recordings dir
 ```
 
-There is no test target — this is a single executable SPM package (see
-`Package.swift`). Verification is manual: build, run, record a session via
-the menu bar, and inspect the resulting session folder (see below) or
-`quill doctor`'s output.
+`swift test` runs the re-transcription/source-validation and artifact-publishing
+tests. Recording, permissions, and on-device inference still require manual
+verification: build, run, record a session via the menu bar, and inspect the
+resulting session folder (see below) or `quill doctor`'s output.
 
 Installing system-wide (`sudo cp .build/release/quill /usr/local/bin/quill`
 or a symlink to the same path) requires `sudo`, so it isn't part of the
@@ -51,8 +51,8 @@ converting the top-level command async.
 
 Single-binary macOS menu-bar app (`NSStatusItem`, `.accessory` activation
 policy — no dock icon, no windows). Entry point is `Quill.swift`
-(`ArgumentParser` with `run`/`doctor`/`install`/`rediarize` subcommands, `run`
-is default). `AppController` (`@MainActor`, in `Quill.swift`) owns the menu
+(`ArgumentParser` with `run`/`doctor`/`install`/`rediarize`/`retranscribe`
+subcommands, `run` is default). `AppController` (`@MainActor`, in `Quill.swift`) owns the menu
 bar, the current `RecordingSession`, and the elapsed-time ticker — all
 recording state transitions happen there.
 
@@ -146,6 +146,7 @@ reference in `DiarizationEngine`; this is safe only because
 - `Notify.swift` — user notifications via `osascript display notification`, not `UserNotifications`, again to avoid needing an app bundle/entitlement.
 - `RecordingsAgentsDoc.swift` — writes/refreshes `AGENTS.md` in the recordings root at daemon startup (`Run.runMain()` only — no other entry point calls it, so a change here isn't visible until the daemon restarts; see the LaunchAgent note above). Versioned via a leading HTML comment; bump `version` whenever the schema it documents (or a new escape hatch like `rediarize`) changes. Keep in sync with `Transcript`/`Transcript.Segment` in `TranscriptionCoordinator.swift`.
 - `Quill.swift`'s `Rediarize` subcommand + `TranscriptionCoordinator.reprocess(_:speakerCountOverrides:)` — manual, on-demand re-diarization for one session with a known speaker count, for when automatic diarization collapses a busy mic track into one speaker (see the diarization pipeline note above and `.issues/rca-002-diarization-speaker-collapse.md`).
+- `Quill.swift`'s `Retranscribe` subcommand + `TranscriptionCoordinator.retranscribe(_:)` — manual, on-demand full re-transcription for one session (`quill retranscribe <session-dir>`), for when a transcript is missing, empty, partial, or stale and you don't want to delete `transcript.json`/`transcript.md` by hand before quill will retry. Delegates to the same `reprocess(_:speakerCountOverrides:)` as `rediarize`, just with an empty overrides dict, so diarization runs fully automatic (or not at all, per config) instead of pinned to a known headcount. Manual reruns require every listed source track to exist and ASR to succeed on each; `GeneratedArtifacts` stages outputs and restores earlier files if a later promotion fails. The normal queue still tolerates missing/failed tracks.
 
 ### External dependency: FluidAudio
 

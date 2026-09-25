@@ -7,7 +7,7 @@ struct Quill: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "quill",
         abstract: "Local meeting recorder + transcriber. Records mic and system audio as two tracks, then transcribes on-device.",
-        subcommands: [Run.self, Doctor.self, Install.self, Rediarize.self],
+        subcommands: [Run.self, Doctor.self, Install.self, Rediarize.self, Retranscribe.self],
         defaultSubcommand: Run.self
     )
 }
@@ -123,6 +123,51 @@ struct Rediarize: ParsableCommand {
         Task {
             do {
                 try await TranscriptionCoordinator().reprocess(dir, speakerCountOverrides: overrides)
+            } catch {
+                result.error = error
+            }
+            semaphore.signal()
+        }
+        semaphore.wait()
+        if let error = result.error { throw error }
+
+        print("done — \(dir.appendingPathComponent("transcript.md").path)")
+    }
+}
+
+/// Forces a full re-transcription of one session — the manual escape hatch
+/// for when a transcript is missing, empty, partial, or stale, without
+/// deleting transcript.json/transcript.md by hand first (the previous
+/// workaround). Mic/system audio and meta.json are untouched; only the
+/// generated transcript files (and speakers.json) are replaced, and only
+/// after a successful pass.
+struct Retranscribe: ParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "retranscribe",
+        abstract: "Force a full re-transcription of one session."
+    )
+
+    @Argument(help: "Path to the session folder, e.g. ~/Recordings/2026.08.05-1104.")
+    var session: String
+
+    func run() throws {
+        let dir = URL(fileURLWithPath: session).standardizedFileURL
+        guard FileManager.default.fileExists(atPath: dir.appendingPathComponent("meta.json").path) else {
+            throw ValidationError("no meta.json in \(dir.path) — is this a session folder?")
+        }
+
+        FileHandle.standardError.write(Data("retranscribing \(dir.lastPathComponent)…\n".utf8))
+
+        // Same synchronous-command-tree bridge as Rediarize.run() above —
+        // see its comment.
+        final class ResultBox: @unchecked Sendable {
+            var error: Error?
+        }
+        let result = ResultBox()
+        let semaphore = DispatchSemaphore(value: 0)
+        Task {
+            do {
+                try await TranscriptionCoordinator().retranscribe(dir)
             } catch {
                 result.error = error
             }

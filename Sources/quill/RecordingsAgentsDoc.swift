@@ -37,7 +37,7 @@ enum RecordingsAgentsDoc {
         return Int(digits.trimmingCharacters(in: .whitespaces))
     }
 
-    private static let version = 3
+    private static let version = 4
     private static let versionPrefix = "<!-- quill:agents-doc-version:"
     private static let versionSuffix = "-->"
 
@@ -136,6 +136,23 @@ enum RecordingsAgentsDoc {
         this with a real headcount you're confident in — an exact count
         forces a re-cluster to exactly that many speakers even if it's wrong,
         so guessing can make the transcript worse, not better.
+
+        ## If a transcript is missing, empty, or looks wrong
+
+        If `transcript.json`/`transcript.md` are missing, empty, partial, or just
+        look stale/wrong for a session, you don't need to delete them by hand
+        before quill will retry (that used to be the only workaround). Run:
+
+        ```
+        quill retranscribe <session-dir>
+        ```
+
+        This forces a full re-transcription pass regardless of whether transcript
+        files already exist, overwriting `transcript.json`/`transcript.md` and
+        `speakers.json` for that session once the pass succeeds. `mic.caf`,
+        `system.caf`, and `meta.json` are never touched. There's no confirmation
+        prompt — it always overwrites — so don't run it on a session whose current
+        transcript you still need to keep.
 
         ## Other files, only if you need them
 

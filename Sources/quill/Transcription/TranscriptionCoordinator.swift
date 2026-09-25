@@ -158,12 +158,30 @@ actor TranscriptionCoordinator {
     /// like this overrides that default.
     func reprocess(_ dir: URL, speakerCountOverrides: [String: Int]) async throws {
         do {
-            try await transcribe(dir, speakerCountOverrides: speakerCountOverrides)
+            try await transcribe(dir, speakerCountOverrides: speakerCountOverrides, requireAllTracks: true)
         } catch {
             await releaseEngines()
             throw error
         }
         await releaseEngines()
+    }
+
+    /// Manual, on-demand full re-transcription of one session — the engine
+    /// underneath `quill retranscribe`, for when a transcript is missing,
+    /// empty, partial, or stale and needs to be regenerated without deleting
+    /// files by hand. Shares reprocess/transcribe with `rediarize`; unlike
+    /// rediarize it passes no speaker-count overrides, so diarization runs
+    /// fully automatically (or not at all, per config) rather than being
+    /// pinned to a known headcount.
+    func retranscribe(_ dir: URL) async throws {
+        log(dir, "manual retranscribe requested")
+        do {
+            try await reprocess(dir, speakerCountOverrides: [:])
+            log(dir, "manual retranscribe succeeded")
+        } catch {
+            log(dir, "manual retranscribe failed: \(error)")
+            throw error
+        }
     }
 
     private func releaseEngines() async {
@@ -173,8 +191,11 @@ actor TranscriptionCoordinator {
         diarizer = nil
     }
 
-    private func transcribe(_ dir: URL, speakerCountOverrides: [String: Int] = [:]) async throws {
+    private func transcribe(
+        _ dir: URL, speakerCountOverrides: [String: Int] = [:], requireAllTracks: Bool = false
+    ) async throws {
         let meta = try SessionMeta.read(from: dir)
+        if requireAllTracks { try meta.validateSourceAudio(in: dir) }
         let engine = try await preparedEngine()
 
         // Only need the shared, automatic diarizer for tracks that aren't
@@ -220,6 +241,10 @@ actor TranscriptionCoordinator {
             do {
                 segments = try await segmentsTask
             } catch {
+                if requireAllTracks {
+                    _ = try? await diarizationTask
+                    throw error
+                }
                 log(dir, "skipping \(track.file): \(error)")
                 // Still await the diarization child task so its result (or
                 // error) doesn't leak past this scope.
@@ -295,8 +320,8 @@ actor TranscriptionCoordinator {
             created_at: ISO8601DateFormatter().string(from: Date()),
             segments: merged
         )
-        try transcript.write(to: dir)
-        writeSpeakers(to: dir, diarizations: diarizations, globalIds: globalIds)
+        let speakers = try speakerData(diarizations: diarizations, globalIds: globalIds)
+        try transcript.write(to: dir, speakers: speakers)
         log(dir, "done — \(merged.count) segments")
     }
 
@@ -454,12 +479,13 @@ actor TranscriptionCoordinator {
     /// than inline, so the canonical transcript stays small — a later
     /// speaker-naming pass reads this file's embeddings/talk time and
     /// rewrites the `id` strings here and in transcript.json/.md.
-    private func writeSpeakers(
-        to dir: URL,
+    private func speakerData(
         diarizations: [String: TrackDiarization],
         globalIds: [String: String]
-    ) {
-        guard !globalIds.isEmpty else { return }
+    ) throws -> Data? {
+        // No speaker data means the publisher removes an old sidecar as part
+        // of the same update as the transcript, rather than leaving it stale.
+        guard !globalIds.isEmpty else { return nil }
         let entries = globalIds.sorted {
             Self.speakerNumber($0.value) < Self.speakerNumber($1.value)
         }
@@ -479,11 +505,10 @@ actor TranscriptionCoordinator {
                 embedding: diarization.speakerDatabase[localSpeakerId] ?? []
             ))
         }
-        guard !infos.isEmpty else { return }
+        guard !infos.isEmpty else { return nil }
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        try? encoder.encode(infos)
-            .write(to: dir.appendingPathComponent("speakers.json"), options: .atomic)
+        return try encoder.encode(infos)
     }
 
     private static func speakerNumber(_ label: String) -> Int {
@@ -524,7 +549,7 @@ actor TranscriptionCoordinator {
 
 /// The slice of meta.json the coordinator needs: which files exist, who they
 /// represent, and how far each track started after the earliest one.
-private struct SessionMeta {
+struct SessionMeta {
     struct Track {
         let file: String
         let speaker: String
@@ -535,10 +560,14 @@ private struct SessionMeta {
 
     enum MetaError: Error, CustomStringConvertible {
         case unreadable(URL)
+        case noTracks
+        case missingAudio(URL)
 
         var description: String {
             switch self {
             case .unreadable(let url): return "can't parse \(url.path)"
+            case .noTracks: return "meta.json has no source audio tracks"
+            case .missingAudio(let url): return "missing or empty source audio track: \(url.path)"
             }
         }
     }
@@ -562,6 +591,20 @@ private struct SessionMeta {
             tracks.append(Track(file: system, speaker: "them", offsetMs: offsets["system"] ?? 0))
         }
         return SessionMeta(tracks: tracks)
+    }
+
+    /// Manual reruns must not replace a usable transcript with a partial one.
+    /// The normal queue deliberately remains best-effort for damaged tracks.
+    func validateSourceAudio(in dir: URL) throws {
+        guard !tracks.isEmpty else { throw MetaError.noTracks }
+        for track in tracks {
+            let url = dir.appendingPathComponent(track.file)
+            let attributes = try? FileManager.default.attributesOfItem(atPath: url.path)
+            guard attributes?[.type] as? FileAttributeType == .typeRegular,
+                  (attributes?[.size] as? NSNumber)?.intValue ?? 0 > 0 else {
+                throw MetaError.missingAudio(url)
+            }
+        }
     }
 }
 
@@ -597,16 +640,15 @@ private struct Transcript: Codable {
     let created_at: String
     let segments: [Segment]
 
-    /// Write transcript.json and render transcript.md. Both writes are atomic
-    /// (temp file + rename), so a partially written transcript never exists on
-    /// disk — resumePending treats presence of transcript.json as "done".
-    func write(to dir: URL) throws {
+    /// Prepare all generated artifacts before replacing any existing ones.
+    func write(to dir: URL, speakers: Data?) throws {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        try encoder.encode(self)
-            .write(to: dir.appendingPathComponent("transcript.json"), options: .atomic)
-        try Data(rendered(title: dir.lastPathComponent).utf8)
-            .write(to: dir.appendingPathComponent("transcript.md"), options: .atomic)
+        try GeneratedArtifacts.publish(
+            in: dir, transcriptJSON: encoder.encode(self),
+            transcriptMarkdown: Data(rendered(title: dir.lastPathComponent).utf8),
+            speakersJSON: speakers
+        )
     }
 
     private func rendered(title: String) -> String {

@@ -66,7 +66,10 @@ on next launch (the filesystem is the queue: a session with `meta.json` but no
 `transcribe.log` and never block later jobs.
 
 The engine sits behind a small protocol; a Whisper engine (WhisperKit
-large-v3-turbo) is planned as the fallback / re-transcription option.
+large-v3-turbo) is planned as an additional, non-English-capable fallback.
+For forcing a re-transcription of one session right now — a missing, empty,
+partial, or stale transcript — see `quill retranscribe` under CLI below;
+that's a manual on-demand re-run of the existing engine, not a different one.
 
 ## Diarization
 
@@ -129,6 +132,11 @@ quill run --out <dir>        # custom recordings root (default ~/Recordings)
 quill doctor                 # check permissions, recordings folder, models
 quill install --launch-at-login
 quill install --uninstall
+quill rediarize <session-dir> --mic-speakers <n> [--system-speakers <n>]
+                              # re-diarize one session with a known speaker count
+quill retranscribe <session-dir>
+                              # force a full re-transcription of one session;
+                              # requires all listed audio tracks, overwrites on success
 ```
 
 ## Stack

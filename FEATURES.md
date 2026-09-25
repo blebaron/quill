@@ -109,6 +109,70 @@ confirm identities. There's currently no way to give the pipeline a known
 ground truth (e.g. "there were only 2 people on this call") to check or
 correct the diarization output against.
 
+## Explicit transcript retry / re-transcription command
+Status: done
+
+The normal retry path is filesystem-driven: `resumePending()` queues a session
+only when `meta.json` exists and `transcript.json` is absent. That works after a
+crash or failed initial transcription, but it is awkward when a transcript is
+empty, partial, stale, or needs to be recreated on demand. The current manual
+workaround is to delete `transcript.json` and `transcript.md`, then restart
+quill. A failed `2026.07.29-0806` Himanshu recording exposed this gap: both
+generated files had to be cleared by hand before the existing retry mechanism
+could be used.
+
+Add a first-class CLI escape hatch analogous to `quill rediarize`, for example:
+
+```sh
+quill retranscribe <session-dir>
+```
+
+The command should:
+
+- Validate that the session has `meta.json` and its source audio tracks.
+- Re-run the configured ASR and diarization pipeline regardless of whether
+  generated transcript files already exist.
+- Preserve `mic.caf`, `system.caf`, and `meta.json`.
+- Replace `transcript.json` and `transcript.md` only after a successful pass,
+  so a failed retry does not destroy the last usable transcript.
+- Refresh `speakers.json` consistently, removing a stale sidecar when the new
+  pass produces no speaker data.
+- Append a clear manual-retry event and result to `transcribe.log`.
+
+Prefer sharing `TranscriptionCoordinator.reprocess` with `rediarize`, while
+keeping `rediarize`'s explicit speaker-count override behavior distinct. Update
+the CLI help, `README.md`, `CLAUDE.md`, and the generated recordings `AGENTS.md`
+notes so agents and humans can invoke the command without manually deleting
+files. Consider a `--force` or explicit confirmation only if overwriting a
+usable transcript is judged too easy to do accidentally.
+
+Implemented as `quill retranscribe <session-dir>` (`Quill.swift`'s
+`Retranscribe` subcommand + `TranscriptionCoordinator.retranscribe(_:)`, which
+delegates to `reprocess(_:speakerCountOverrides:)` with an empty overrides
+dict). No `--force` flag — it always overwrites unconditionally, matching
+`rediarize`'s existing behavior; considered and deliberately skipped per
+product decision. A new pass removes a stale `speakers.json` when it produces
+no speaker data, closing that gap for `rediarize` and the normal queue too.
+Manual reruns validate all tracks listed in `meta.json` before loading models,
+and fail rather than replacing a transcript when ASR fails on any track. All
+generated outputs are staged first; per-file atomic renames and rollback on
+promotion errors preserve earlier outputs if publishing fails. Speaker-sidecar
+write errors now propagate rather than reporting `done`. The manual request
+and its success/failure are appended to `transcribe.log`. These checks have
+automated tests; end-to-end inference on actual meeting audio is still a
+manual verification step. A process crash between artifact renames is not a
+multi-file atomic transaction, and degraded-but-usable ASR/diarization results
+still need a separate result/quality contract.
+
+End-to-end check (2026-09-25): `quill retranscribe` on a scratch copy of the
+latest completed session (`2026.09.25-1104`) exited successfully. All 360
+segments, the rendered markdown, and all five speaker-sidecar entries matched
+the original; only `transcript.json`'s `created_at` changed. The source session
+and the copied audio/metadata remained unchanged. FluidAudio printed E5RT
+`Failed to PropagateInputTensorShapes` to stdout despite producing consistent
+output; it did not appear in `transcribe.log`. Capturing and classifying such
+upstream warnings belongs to that separate result/quality work.
+
 ## Transcript-level echo suppression (mic track picking up system audio)
 Status: done
 
