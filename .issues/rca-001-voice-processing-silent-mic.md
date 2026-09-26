@@ -1,9 +1,13 @@
 ---
 title: "Voice processing produces a silent mic track"
 date: 2026-07-25
-status: done
+beads_issue: quill-urt
 affects: "microphone recording and speaker attribution"
 ---
+
+Historical incident analysis. The canonical issue and its closed status are in
+Beads (`bd show quill-urt`). Proposed experiments below record the investigation,
+not a current plan to re-enable voice processing.
 
 ## Context
 

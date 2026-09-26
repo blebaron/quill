@@ -1,9 +1,13 @@
 ---
 title: "Multi-speaker mic recordings collapse into a single Speaker"
 date: 2026-08-05
-status: mitigated
+beads_issue: quill-apa
 affects: "speaker diarization on busy, single-mic recordings"
 ---
+
+Historical incident analysis. The manual mitigation is recorded in the closed
+Beads issue (`bd show quill-apa`); broader output validation is tracked in
+`quill-xdp`. The upstream limitation described below remains relevant.
 
 ## Context
 

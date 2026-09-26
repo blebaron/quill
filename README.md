@@ -8,6 +8,16 @@ Nothing ever leaves the machine.
 Named for the feather. Sibling of [parrot](https://github.com/digimata/parrot), same skeleton: single
 Swift binary, menu-bar tray, no app bundle.
 
+## Project work
+
+See [Product direction](PRODUCT.md) for Quill's goal, ownership boundary,
+quality contract, and prioritization principles.
+
+Feature ideas, open work, and completed issue history are tracked locally with
+Beads rather than in a Markdown backlog. Run `bd ready` for available work,
+`bd list --all` for the full history, and `bd show <id>` for details. The
+investigations in `.issues/` are technical references, not separate issue lists.
+
 ## Install
 
 ```sh
@@ -66,7 +76,9 @@ on next launch (the filesystem is the queue: a session with `meta.json` but no
 `transcribe.log` and never block later jobs.
 
 The engine sits behind a small protocol; a Whisper engine (WhisperKit
-large-v3-turbo) is planned as an additional, non-English-capable fallback.
+large-v3-turbo) for non-English transcription is tracked as `quill-zfv` in
+Beads, but is not available yet.
+
 For forcing a re-transcription of one session right now — a missing, empty,
 partial, or stale transcript — see `quill retranscribe` under CLI below;
 that's a manual on-demand re-run of the existing engine, not a different one.
