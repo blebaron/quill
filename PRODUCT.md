@@ -71,6 +71,26 @@ Preserve the original report without putting private meeting audio,
 transcript excerpts, embeddings, or identifying details into an issue by
 default. brAIn-side work stays with brAIn; Quill's Beads is not its backlog.
 
+Make repeat handoffs **delta-first**. If every Quill-side observation already
+maps to an issue and adds no new evidence or decision, say so briefly rather
+than restating the backlog. For a new or changed observation, report its owner,
+matching issue ID (if any), what happened and why it matters, and the smallest
+safe example that could verify a fix. Distinguish an observed failure from a
+suggested solution; say when frequency, impact, or reproduction is unknown.
+For shared work, state what Quill needs to expose and what brAIn will do with
+it. Only propose a priority change when new evidence or a product decision
+justifies one. Do not inspect private recordings merely to complete an intake
+report; ask Brian before using one as a test case.
+
+For each mapped Quill problem reported in a handoff, include its stable
+`quill-...` Beads ID. If brAIn keeps a related note or issue on its side,
+retain that ID as the reference back to Quill; do not copy Quill's status into
+a second tracker.
+
+When Brian asks for progress, resolve the current status with
+`bd show <id> --json` from this Quill checkout. Beads data is local to a
+checkout unless separately synced, so an ID alone is not a public web link.
+
 ## Processing quality contract (target, not yet implemented)
 
 Report **processing stages**, **output assessment**, and **rerun disposition**

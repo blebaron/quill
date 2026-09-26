@@ -7,6 +7,14 @@ read [PRODUCT.md](PRODUCT.md#papercut-intake) first. It defines the Quill/brAIn
 ownership boundary and the lightweight intake process. Do not treat a request
 to gather papercuts as permission to file or reprioritize issues.
 
+## GitHub account for this repository
+
+The `origin` remote is `blebaron/quill`. Use the GitHub account **`blebaron`**
+for authenticated operations against it; the machine's default `gh` account
+may be `I64963_verisk`, which cannot push to this remote. Prefer selecting
+`blebaron` for the individual operation rather than changing the machine's
+active GitHub account. Do not commit or push unless the user asks.
+
 <!-- BEGIN BEADS INTEGRATION v:1 profile:full hash:9c890b20 -->
 ## Issue Tracking with bd (beads)
 
