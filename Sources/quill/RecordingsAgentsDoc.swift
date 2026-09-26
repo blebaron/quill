@@ -37,7 +37,7 @@ enum RecordingsAgentsDoc {
         return Int(digits.trimmingCharacters(in: .whitespaces))
     }
 
-    private static let version = 4
+    private static let version = 5
     private static let versionPrefix = "<!-- quill:agents-doc-version:"
     private static let versionSuffix = "-->"
 
@@ -58,29 +58,29 @@ enum RecordingsAgentsDoc {
         Human-readable, chronological. Each line is:
 
         ```
-        **[MM:SS] <speaker>:** <text>
+        **[MM:SS] <speaker> (<track>):** <text>
         ```
 
-        Timestamps are relative to session start. `<speaker>` is one of:
-
-        - `me` — the person running quill (mic wearer)
-        - `them` — used only if diarization was off/failed for a track; a flat
-          fallback label, not a real distinct speaker
-        - `Speaker 1`, `Speaker 2`, ... — other people, numbered in order of first
-          appearance. These are **not stable identities across sessions** — `Speaker
-          1` in one folder has no relation to `Speaker 1` in another. There's no
-          name attached anywhere yet (a future pass may add real names via
-          `speakers.json`'s voice embeddings — not built yet, so don't expect names).
+        Timestamps are relative to session start. `<track>` is `mic` (the
+        default input device) or `system` (Mac playback). It says where the
+        audio came from, **not who spoke**. `<speaker>` is either `Speaker 1`,
+        `Speaker 2`, ... (session-local voice clusters numbered by first
+        appearance) or `Unassigned speaker` (diarization disabled, failed, or
+        unable to match this segment). An unassigned segment is not a new
+        person. A cluster may be wrong or split; even a numbered speaker is
+        **not a verified identity**. Ask Brian to confirm identities before
+        attributing statements or actions. Older transcripts may contain the
+        legacy `me`/`them` labels; those were track fallbacks, not identity
+        confirmations. No name catalog is currently available.
 
         Segments can be short and choppy (ASR breaks on pauses, not necessarily on
         sentence boundaries) — read several consecutive lines from the same speaker
         as one thought, not each line in isolation.
 
         **Tail caution:** it's easy to forget to stop a recording. If the last few
-        minutes of a transcript degrade into short, fragmented, single-speaker (`me`
-        only) lines with no back-and-forth, that's very likely dead time after the
-        actual meeting ended, not meaningful content — treat it as noise unless
-        context says otherwise.
+        minutes of a transcript degrade into short, fragmented lines without
+        back-and-forth, the recording may have continued after the meeting.
+        Check context; do not discard a legitimate solo discussion or closing speech.
 
         **Missing lines are intentional.** Recording without headphones means the mic
         also picks up whatever the speakers are playing, so far-end speech would
@@ -97,14 +97,15 @@ enum RecordingsAgentsDoc {
           "engine": "parakeet",
           "model": "parakeet-tdt-0.6b-v2-coreml",
           "segments": [
-            {"start_ms": 310, "end_ms": 1910, "speaker": "me", "text": "..."},
-            {"start_ms": 2130, "end_ms": 2400, "speaker": "Speaker 1", "text": "...", "echo": true}
+            {"start_ms": 310, "end_ms": 1910, "speaker": "Unassigned speaker", "track": "mic", "text": "..."},
+            {"start_ms": 2130, "end_ms": 2400, "speaker": "Speaker 1", "track": "system", "text": "...", "echo": true}
           ]
         }
         ```
 
         Use this over the `.md` if you need to do timestamp math or filter/aggregate
-        programmatically — one segment per object, same speaker labels as above.
+        programmatically — one segment per object, same speaker labels and
+        separate track provenance as above.
         Unlike `transcript.md`, this includes every segment: `echo: true` marks ones
         quill judged to be acoustic echo of the other track rather than real local
         speech (see above). Skip those too unless you specifically need the raw
@@ -158,10 +159,10 @@ enum RecordingsAgentsDoc {
 
         - `meta.json` — session start/end time (ISO 8601, UTC) and total duration.
           Useful for "when did this happen" / "how long was it" questions.
-        - `speakers.json` — one entry per non-`me` speaker with total talk time and a
-          voice embedding (float vector). Only useful if you're comparing speaker
-          identity/participation across the *same* session; the embedding isn't
-          currently matched against anything else.
+        - `speakers.json` — one entry per matched speaker cluster with its source
+          track, total talk time and voice embedding (float vector). There is
+          no entry for unassigned turns. The embedding isn't matched against
+          a person or another session yet and does not verify identity.
         - `transcribe.log` — pipeline log for that session. Only check this if
           `transcript.json`/`.md` are missing or look wrong — it'll say what failed
           (e.g. "diarization skipped for system.caf: noSpeechDetected", which is

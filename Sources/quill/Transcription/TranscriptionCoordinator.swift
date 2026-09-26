@@ -2,8 +2,8 @@ import FluidAudio
 import Foundation
 
 /// Post-recording pipeline: a serial queue of session folders to transcribe.
-/// mic.caf → "me", system.caf → "them"; each track's segments are shifted by
-/// its start offset, merged by timestamp, and written as transcript.json
+/// mic.caf and system.caf are distinct capture sources; their segments are
+/// shifted by start offset, merged by timestamp, and written as transcript.json
 /// (canonical) plus transcript.md (readable). When diarization is enabled,
 /// each track is additionally diarized and its segments relabeled into a
 /// single "Speaker N" id space (numbered by first appearance across both
@@ -285,31 +285,17 @@ actor TranscriptionCoordinator {
             ? Self.detectEcho(in: raw)
             : [Bool](repeating: false, count: raw.count)
 
-        // Assign "Speaker N" in order of first appearance across the whole
-        // chronological transcript, not per-track — so numbering reads
-        // naturally regardless of which physical track someone spoke on.
-        // Segments with no diarization match (disabled, failed, or no
-        // overlapping cluster) keep the track's flat fallback label.
-        var globalIds: [String: String] = [:]
-        var nextSpeakerNumber = 1
+        // Number matched clusters by first appearance; leave unmatched
+        // segments unassigned rather than turning track origin into identity.
+        var labels = SpeakerLabels()
         var merged: [Transcript.Segment] = []
         for (index, segment) in raw.enumerated() {
-            let speaker: String
-            if let localSpeakerId = segment.localSpeakerId {
-                let key = "\(segment.trackLabel)::\(localSpeakerId)"
-                if let assigned = globalIds[key] {
-                    speaker = assigned
-                } else {
-                    let assigned = "Speaker \(nextSpeakerNumber)"
-                    globalIds[key] = assigned
-                    nextSpeakerNumber += 1
-                    speaker = assigned
-                }
-            } else {
-                speaker = segment.trackLabel
-            }
+            let assignment = labels.assign(
+                trackLabel: segment.trackLabel, localSpeakerId: segment.localSpeakerId
+            )
             merged.append(Transcript.Segment(
-                speaker: speaker, start_ms: segment.start_ms, end_ms: segment.end_ms,
+                speaker: assignment.speaker, track: assignment.track,
+                start_ms: segment.start_ms, end_ms: segment.end_ms,
                 text: segment.text, echo: echoFlags[index] ? true : nil
             ))
         }
@@ -320,7 +306,7 @@ actor TranscriptionCoordinator {
             created_at: ISO8601DateFormatter().string(from: Date()),
             segments: merged
         )
-        let speakers = try speakerData(diarizations: diarizations, globalIds: globalIds)
+        let speakers = try speakerData(diarizations: diarizations, globalIds: labels.globalIds)
         try transcript.write(to: dir, speakers: speakers)
         log(dir, "done — \(merged.count) segments")
     }
@@ -376,6 +362,24 @@ actor TranscriptionCoordinator {
         let start_ms: Int
         let end_ms: Int
         let text: String
+    }
+
+    /// Cluster IDs are session-local and never names. A missing cluster is
+    /// unresolved on its own track, not the recorder or a new distinct voice.
+    struct SpeakerLabels {
+        private(set) var globalIds: [String: String] = [:]
+        private var nextSpeakerNumber = 1
+
+        mutating func assign(trackLabel: String, localSpeakerId: String?) -> (speaker: String, track: String) {
+            let track = trackLabel == "me" ? "mic" : "system"
+            guard let localSpeakerId else { return ("Unassigned speaker", track) }
+            let key = "\(trackLabel)::\(localSpeakerId)"
+            if let assigned = globalIds[key] { return (assigned, track) }
+            let assigned = "Speaker \(nextSpeakerNumber)"
+            globalIds[key] = assigned
+            nextSpeakerNumber += 1
+            return (assigned, track)
+        }
     }
 
     /// Segments further than this from any detected speech span are left
@@ -622,9 +626,11 @@ private struct SpeakerInfo: Codable {
 /// RecordingsAgentsDoc.swift's `content` (and bump its `version`) — that's
 /// the schema description handed to any other agent pointed at a recordings
 /// folder, and it goes stale silently otherwise.
-private struct Transcript: Codable {
+struct Transcript: Codable {
     struct Segment: Codable {
         let speaker: String
+        /// Source of the audio, not the identity of the speaker.
+        let track: String
         let start_ms: Int
         let end_ms: Int
         let text: String
@@ -654,7 +660,7 @@ private struct Transcript: Codable {
     private func rendered(title: String) -> String {
         var lines = ["# \(title)", "", "engine: \(engine) (\(model))", ""]
         for seg in segments where seg.echo != true {
-            lines.append("**[\(Self.clock(seg.start_ms))] \(seg.speaker):** \(seg.text)")
+            lines.append("**[\(Self.clock(seg.start_ms))] \(seg.speaker) (\(seg.track)):** \(seg.text)")
             lines.append("")
         }
         return lines.joined(separator: "\n")

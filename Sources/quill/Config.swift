@@ -51,8 +51,8 @@ enum Config {
     }
 
     /// Whether tracks are diarized (split into per-speaker labels) during
-    /// transcription. Default on; disabling falls back to flat "me"/"them"
-    /// labels and skips the diarization model entirely.
+    /// transcription. Default on; disabling leaves speakers unassigned and
+    /// retains their mic/system track provenance without loading the model.
     static func diarizationEnabled() -> Bool {
         diarization()?["enabled"] as? Bool ?? true
     }
