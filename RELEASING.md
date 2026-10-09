@@ -143,7 +143,7 @@ After explicit approval, from the release repository root:
   test "$(git remote get-url origin)" = 'https://github.com/blebaron/quill.git'
   NOTES_FILE="$(mktemp)"
   trap 'rm -f "$NOTES_FILE"' EXIT
-  git show "$commit:docs/releases/$tag.md" > "$NOTES_FILE"
+  git show "${commit}:docs/releases/$tag.md" > "$NOTES_FILE"
   if grep -F 'Draft for review' "$NOTES_FILE"; then
     echo 'Release notes are still a draft' >&2
     exit 1
@@ -154,7 +154,7 @@ After explicit approval, from the release repository root:
   export GH_TOKEN
   git tag -a "$tag" "$commit" -m "Quill $version"
   git -c credential.helper= -c 'credential.helper=!gh auth git-credential' \
-    push origin "$commit:refs/heads/master"
+    push origin "${commit}:refs/heads/master"
   git -c credential.helper= -c 'credential.helper=!gh auth git-credential' \
     push origin "refs/tags/$tag"
   gh release create "$tag" --repo blebaron/quill --verify-tag \
