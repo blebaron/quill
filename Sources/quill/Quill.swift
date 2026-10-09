@@ -4,9 +4,12 @@ import Foundation
 
 @main
 struct Quill: ParsableCommand {
+    static let releaseVersion = "0.1.0"
+
     static let configuration = CommandConfiguration(
         commandName: "quill",
         abstract: "Local meeting recorder + transcriber. Records mic and system audio as two tracks, then transcribes on-device.",
+        version: releaseVersion,
         subcommands: [Run.self, Doctor.self, Install.self, Rediarize.self, Retranscribe.self],
         defaultSubcommand: Run.self
     )

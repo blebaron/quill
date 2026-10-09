@@ -37,7 +37,7 @@ enum RecordingsAgentsDoc {
         return Int(digits.trimmingCharacters(in: .whitespaces))
     }
 
-    private static let version = 5
+    private static let version = 6
     private static let versionPrefix = "<!-- quill:agents-doc-version:"
     private static let versionSuffix = "-->"
 
@@ -68,7 +68,7 @@ enum RecordingsAgentsDoc {
         appearance) or `Unassigned speaker` (diarization disabled, failed, or
         unable to match this segment). An unassigned segment is not a new
         person. A cluster may be wrong or split; even a numbered speaker is
-        **not a verified identity**. Ask Brian to confirm identities before
+        **not a verified identity**. Ask the recording owner to confirm identities before
         attributing statements or actions. Older transcripts may contain the
         legacy `me`/`them` labels; those were track fallbacks, not identity
         confirmations. No name catalog is currently available.
@@ -119,24 +119,25 @@ enum RecordingsAgentsDoc {
         `Speaker 1`, even though the transcript text clearly has multiple
         people talking (different names addressed, back-and-forth turns,
         distinct topics/opinions). `speakers.json` having only one entry with
-        most of the session's talk time is the tell. This is a known
-        diarization limitation, not something wrong with the recording itself
-        — see `.issues/rca-002-diarization-speaker-collapse.md` in the quill
-        repo for why.
+        most of the session's talk time is a warning. This can be a diarization
+        limitation even on usable audio; speaker count alone does not establish
+        recording quality. See `.issues/rca-002-diarization-speaker-collapse.md`
+        in the quill repo for historical context.
 
         If you're confident this happened and you know (or can ask) the
-        actual number of distinct voices, you can trigger a fix:
+        actual number of voices that spoke audibly, you can request a rerun:
 
         ```
         quill rediarize <session-dir> --mic-speakers <n> [--system-speakers <n>]
         ```
 
-        This re-runs diarization for that session with the given count forced
-        (bypassing the automatic detection that got it wrong) and overwrites
-        `transcript.json`/`transcript.md`/`speakers.json` in place. Only do
-        this with a real headcount you're confident in — an exact count
-        forces a re-cluster to exactly that many speakers even if it's wrong,
-        so guessing can make the transcript worse, not better.
+        This reruns ASR and diarization. The count is a target, not proof of
+        identities or clean separation. A missing requested track, invalid count,
+        diarization failure or mismatched returned timeline count fails without
+        replacing existing transcript/speaker files. On success it still replaces
+        `transcript.json`/`transcript.md`/`speakers.json`; back them up first.
+        Text and timestamps can change too. Guessing the count can make the
+        partition worse; count matched is not a quality verdict.
 
         ## If a transcript is missing, empty, or looks wrong
 

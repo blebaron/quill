@@ -50,15 +50,13 @@ actor DiarizationEngine {
     /// Diarize a track with an explicit, known speaker count instead of
     /// letting FluidAudio detect it automatically.
     ///
-    /// FluidAudio's automatic speaker-count detection can badly under-count
-    /// on a busy, single-mic recording (a whole room collapsed to one
-    /// "Speaker 1"), and its `minSpeakers`/`maxSpeakers` hints don't reliably
-    /// fix it — the safety net that's supposed to catch this compares against
-    /// the pre-EM warm-start cluster count, not the number of speakers VBx's
-    /// own EM step decides actually have meaningful support, so a mismatch
-    /// between the two goes uncaught. Only an exact `numSpeakers` reliably
-    /// forces a re-cluster. See `.issues/rca-002-diarization-speaker-collapse.md`
-    /// for the full investigation.
+    /// FluidAudio's automatic detection can under-count on a busy single-mic
+    /// recording. Version 0.17.7 checks active and assigned clusters instead
+    /// of the old warm-start count, but an exact count is still a target:
+    /// downstream assignment may leave clusters unused. The coordinator
+    /// checks the returned timeline count and preserves prior artifacts when
+    /// an explicit request fails. A count match never certifies identities.
+    /// See `.issues/rca-002-diarization-speaker-collapse.md` for historical context.
     ///
     /// There's no way to know the right count ahead of time for a passive
     /// recording, so this isn't wired into the normal per-session pipeline —

@@ -27,6 +27,16 @@ actor TranscriptionCoordinator {
     private var lastFailure: String?
     private var statusHandler: (@Sendable (Status) -> Void)?
 
+    // Injectable only for deterministic pipeline tests; production uses the
+    // normal engines. The callback returns no identity guarantees.
+    typealias DiarizationRunner = @Sendable (URL, Int?) async throws -> DiarizationResult?
+    private let injectedDiarization: DiarizationRunner?
+
+    init(engine: TranscriptionEngine? = nil, diarization: DiarizationRunner? = nil) {
+        self.engine = engine
+        self.injectedDiarization = diarization
+    }
+
     func setStatusHandler(_ handler: @escaping @Sendable (Status) -> Void) {
         statusHandler = handler
     }
@@ -196,13 +206,27 @@ actor TranscriptionCoordinator {
     ) async throws {
         let meta = try SessionMeta.read(from: dir)
         if requireAllTracks { try meta.validateSourceAudio(in: dir) }
+        let availableTracks = Set(meta.tracks.map(\.speaker))
+        let missingTracks = Set(speakerCountOverrides.keys).subtracting(availableTracks)
+        guard missingTracks.isEmpty else {
+            let names = missingTracks.sorted().map { $0 == "me" ? "mic" : $0 == "them" ? "system" : $0 }
+            throw NSError(domain: "quill.diarization", code: 2, userInfo: [
+                NSLocalizedDescriptionKey:
+                    "speaker count requested for missing audio track(s): \(names.joined(separator: ", ")); prior artifacts preserved"
+            ])
+        }
+        guard speakerCountOverrides.values.allSatisfy({ $0 > 0 }) else {
+            throw NSError(domain: "quill.diarization", code: 3, userInfo: [
+                NSLocalizedDescriptionKey: "requested speaker counts must be positive; prior artifacts preserved"
+            ])
+        }
         let engine = try await preparedEngine()
 
         // Only need the shared, automatic diarizer for tracks that aren't
         // getting an explicit override below.
         let needsAutoDiarizer = meta.tracks.contains { speakerCountOverrides[$0.speaker] == nil }
         var diarizer: DiarizationEngine?
-        if needsAutoDiarizer, Config.diarizationEnabled() {
+        if needsAutoDiarizer, injectedDiarization == nil, Config.diarizationEnabled() {
             do {
                 diarizer = try await preparedDiarizer()
             } catch {
@@ -230,9 +254,10 @@ actor TranscriptionCoordinator {
             // the others in the eyes of the region-isolation checker.
             let trackDiarizer = diarizer
             let overrideCount = speakerCountOverrides[track.speaker]
+            let injected = injectedDiarization
             async let segmentsTask = engine.transcribe(audio)
             async let diarizationTask: DiarizationResult? = Self.diarize(
-                audio, overrideCount: overrideCount, fallback: trackDiarizer
+                audio, overrideCount: overrideCount, fallback: trackDiarizer, injected: injected
             )
 
             // One bad track (empty, truncated) shouldn't cost us the other's
@@ -263,7 +288,23 @@ actor TranscriptionCoordinator {
                     trackDiarization = diarization
                 }
             } catch {
+                // A requested-count rerun must not quietly publish ASR-only
+                // output when its diarization failed.
+                if overrideCount != nil { throw error }
                 log(dir, "diarization skipped for \(track.file): \(error)")
+            }
+
+            if let requested = overrideCount {
+                let observed = Set((trackDiarization?.timeline ?? []).filter {
+                    !$0.speakerId.isEmpty && $0.startTimeSeconds.isFinite
+                        && $0.endTimeSeconds.isFinite && $0.durationSeconds > 0
+                }.map(\.speakerId)).count
+                guard requested > 0, observed == requested else {
+                    throw NSError(domain: "quill.diarization", code: 1, userInfo: [
+                        NSLocalizedDescriptionKey:
+                            "requested \(requested) speakers on \(track.file), observed \(observed); prior artifacts preserved"
+                    ])
+                }
             }
 
             let offset = TimeInterval(track.offsetMs) / 1000
@@ -336,8 +377,10 @@ actor TranscriptionCoordinator {
     /// Diarizes one track, preferring an explicit speaker-count override
     /// (`quill rediarize`) over the shared automatic diarizer.
     private static func diarize(
-        _ audio: URL, overrideCount: Int?, fallback: DiarizationEngine?
+        _ audio: URL, overrideCount: Int?, fallback: DiarizationEngine?,
+        injected: DiarizationRunner? = nil
     ) async throws -> DiarizationResult? {
+        if let injected { return try await injected(audio, overrideCount) }
         if let overrideCount {
             return try await DiarizationEngine.diarizeWithKnownSpeakerCount(audio, count: overrideCount)
         }

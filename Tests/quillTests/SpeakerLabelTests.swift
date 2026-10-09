@@ -85,9 +85,23 @@ final class SpeakerLabelTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: root) }
         RecordingsAgentsDoc.ensureUpToDate(root: root)
         let guide = try String(contentsOf: root.appendingPathComponent("AGENTS.md"), encoding: .utf8)
-        XCTAssertTrue(guide.contains("quill:agents-doc-version: 5"))
+        XCTAssertTrue(guide.contains("quill:agents-doc-version: 6"))
         XCTAssertTrue(guide.contains("not a verified identity"))
         XCTAssertTrue(guide.contains("Unassigned speaker"))
         XCTAssertFalse(guide.contains("`me` — the person running quill"))
+    }
+
+    func testGeneratedGuideDescribesCountTargetAndSafeFailure() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("quill-guide-count-test-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        RecordingsAgentsDoc.ensureUpToDate(root: root)
+        let guide = try String(contentsOf: root.appendingPathComponent("AGENTS.md"), encoding: .utf8)
+        XCTAssertTrue(guide.contains("count is a target"))
+        XCTAssertTrue(guide.contains("fails without"))
+        XCTAssertTrue(guide.contains("back them up first"))
+        XCTAssertTrue(guide.contains("recording owner"))
+        XCTAssertFalse(guide.contains("Ask Brian"))
+        XCTAssertFalse(guide.contains("forces a re-cluster to exactly"))
     }
 }

@@ -20,16 +20,41 @@ investigations in `.issues/` are technical references, not separate issue lists.
 
 ## Install
 
+Run this block from the repository root of a separate source checkout for a
+first installation. For
+an existing installation, finish recording and transcription, then follow the
+[version's upgrade and rollback notes](docs/releases/v0.1.0.md) instead.
+
 ```sh
-cd quill
+(
+set -e
+if [ -e /usr/local/bin/quill ] || [ -L /usr/local/bin/quill ]; then
+  echo 'Existing installation: use the upgrade notes rather than replacing it without a backup' >&2
+  exit 1
+fi
 swift build -c release
-sudo cp .build/release/quill /usr/local/bin/quill
-quill install --launch-at-login   # optional — runs in the background on login
+BIN_DIR="$(swift build -c release --show-bin-path)"
+sudo mkdir -p /usr/local/bin
+sudo install -m 755 "$BIN_DIR/quill" /usr/local/bin/quill.new
+cmp "$BIN_DIR/quill" /usr/local/bin/quill.new
+sudo mv -f /usr/local/bin/quill.new /usr/local/bin/quill
+/usr/local/bin/quill --version
+)
 ```
+
+Optional after installation: `/usr/local/bin/quill install --launch-at-login`.
 
 **Requires:** macOS 15+ (Core Audio process taps for system audio — no
 virtual device, no kernel extension). Apple Silicon recommended for
 transcription speed.
+
+## Releases
+
+Quill releases are tagged source snapshots, not prebuilt binaries or automatic
+updates. Check [GitHub Releases](https://github.com/blebaron/quill/releases) for
+publication status; a version in the source tree does not mean it is published.
+Maintainers follow [RELEASING.md](RELEASING.md). Changes are listed in
+[CHANGELOG.md](CHANGELOG.md).
 
 ## How to use
 
@@ -110,6 +135,18 @@ mean a new distinct voice or the person running Quill. If no clusters are
 matched, no `speakers.json` is written. Older recordings may still contain
 the legacy `me`/`them` track fallbacks; do not treat those as confirmed identities.
 
+For an explicitly requested count (`rediarize`), a missing track, nonpositive
+count, diarization failure, missing result or mismatched nonempty timeline
+speaker count is an error. Existing transcript/speaker files are preserved.
+Matching that count does not verify identities or clean separation, and does
+not guarantee every timeline speaker receives a final transcript label.
+
+Quill pins FluidAudio 0.17.7. Its clustering behavior differs from 0.15.5;
+automatic output and speaker labels can change. `rediarize` and `retranscribe`
+also rerun ASR, so text and timestamps can change. On success they still replace
+generated artifacts; back up the session before rerunning it. Existing sessions
+are not migrated automatically. Full uncertain-candidate review is not yet built.
+
 ## Config
 
 Optional, at `~/.config/quill/config.json`:
@@ -142,7 +179,7 @@ Optional, at `~/.config/quill/config.json`:
 
 ## CLI
 
-```sh
+```text
 quill                        # run the menu-bar daemon (^C to quit)
 quill run --out <dir>        # custom recordings root (default ~/Recordings)
 quill doctor                 # check permissions, recordings folder, models
