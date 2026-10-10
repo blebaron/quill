@@ -15,7 +15,7 @@ may be `I64963_verisk`, which cannot push to this remote. Prefer selecting
 `blebaron` for the individual operation rather than changing the machine's
 active GitHub account. Do not commit or push unless the user asks.
 
-<!-- BEGIN BEADS INTEGRATION v:1 profile:full hash:9c890b20 -->
+<!-- BEGIN BEADS INTEGRATION v:1 profile:full hash:bacef91e -->
 ## Issue Tracking with bd (beads)
 
 **IMPORTANT**: This project uses **bd (beads)** for ALL issue tracking. Do NOT use markdown TODOs, task lists, or other tracking methods.
@@ -95,6 +95,7 @@ bd close bd-42 --reason "Completed" --json
 bd stores issue history in Dolt:
 
 - Each write auto-commits to Dolt history
+- Use `bd dolt push`/`bd dolt pull` for remote sync
 - Do not treat `.beads/issues.jsonl` as the sync protocol
 
 **Architecture in one line:** issues live in a local Dolt DB; sync uses `refs/dolt/data` on your git remote; `.beads/issues.jsonl` is a passive export. See https://github.com/gastownhall/beads/blob/main/docs/core-concepts/sync-concepts.md for details and anti-patterns.
@@ -133,6 +134,7 @@ This protocol applies when ending a Beads implementation workflow. It is subordi
 
    # Team-maintainer opt-in only, unless current instructions forbid it:
    git pull --rebase
+   bd dolt push
    git push
    git status
    ```
